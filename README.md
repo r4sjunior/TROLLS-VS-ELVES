@@ -56,7 +56,8 @@ com WebSocket, por isso precisa de um processo contínuo, como Render, Railway, 
 1. Suba o projeto para o GitHub.
 2. Em render.com: **New → Blueprint** → escolha o repositório → **Apply**.
 3. Anote o endereço gerado, por exemplo `https://trolls-vs-elves-server.onrender.com`. Ele também serve o jogo completo.
-4. Na Vercel: **Settings → Environment Variables**, crie `VITE_SERVER_URL` com o valor `wss://trolls-vs-elves-server.onrender.com` e faça **Redeploy**.
+4. O endereço oficial fica em `.env.production` (`VITE_SERVER_URL`), embutido no build do site e do APK. O jogador não digita nada. Para trocar de servidor, edite esse arquivo (ou a variável de mesmo nome na Vercel) e publique de novo.
+   Quem abre o jogo direto pelo próprio servidor (`npm start` no PC/LAN ou o endereço do Render) usa esse mesmo servidor.
 
 No plano gratuito, o Render "dorme" depois de 15 min sem uso. O primeiro acesso leva cerca de 1 min e o jogo
 mostra "Acordando o servidor…" e tenta de novo sozinho. O ranking fica no disco temporário e zera a cada deploy.

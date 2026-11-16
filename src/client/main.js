@@ -10,6 +10,8 @@ import { MAP_PRESETS } from '../shared/mapgen.js';
 import { ELF_SKINS } from './models.js';
 
 const profile = loadProfile();
+// Versões antigas pediam o servidor na tela do multiplayer; esquece o que foi digitado lá
+if (!profile.settings.serverAuto) { profile.settings.server = ''; profile.settings.serverAuto = true; saveProfile(profile); }
 
 // Responsividade: tudo é desenhado para um celular deitado de referência (915×412)
 // e escalado para a tela real — de celulares pequenos a monitores 4K.
@@ -49,6 +51,16 @@ function makeRenderer() {
   renderer.zoom = 1.25;
 }
 
+// Servidor oficial embutido no build (.env.production). O jogador nunca precisa digitar nada:
+//  - site na Vercel e APK → servidor oficial
+//  - jogo aberto direto do próprio servidor (npm start no PC/LAN, Render) → o mesmo endereço
+//  - "Servidor personalizado" nas Configurações só para quem quer usar outro
+const OFFICIAL = (import.meta.env.VITE_SERVER_URL || '').trim();
+function servedByGameServer() {
+  if (window.Capacitor) return false; // APK: a página é local, o servidor fica na nuvem
+  const h = location.hostname;
+  return /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h) || h.endsWith('.onrender.com');
+}
 function serverUrl() {
   if (profile.settings.server) {
     let s = profile.settings.server.trim();
@@ -56,8 +68,8 @@ function serverUrl() {
     return s.replace(/\/$/, '') + (s.endsWith('/ws') ? '' : '/ws');
   }
   // Site estático (ex.: Vercel) aponta para o servidor de jogo definido no build: VITE_SERVER_URL
-  const env = import.meta.env.VITE_SERVER_URL;
-  if (env) { const e = env.trim().replace(/\/$/, '').replace(/^http/, 'ws'); return e.endsWith('/ws') ? e : e + '/ws'; }
+  const env = OFFICIAL;
+  if (env && !servedByGameServer()) { const e = env.trim().replace(/\/$/, '').replace(/^http/, 'ws'); return e.endsWith('/ws') ? e : e + '/ws'; }
   return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
 }
 // Servidores gratuitos (Render etc.) dormem sem uso: um GET acorda antes de conectar
@@ -123,7 +135,6 @@ const SCREENS = {
       <label>Equipe preferida</label><div class="chips">${['A', 'E', 'T'].map((t) => `<button class="chip ${arenaPref.team === t ? 'on' : ''}" data-team="${t}">${{ A: 'Automática', E: 'Elfos', T: 'Trolls' }[t]}</button>`).join('')}</div>
       ${arenaPref.team === 'T' ? `<div class="chips">${Object.entries(TROLL_CLASSES).map(([k, c]) => `<button class="chip ${arenaPref.cls === k ? 'on' : ''}" data-cls="${k}">${c.name}</button>`).join('')}</div>` : ''}
       <div class="row"><button class="btn hero" id="quick">Entrar na arena</button><button class="btn" id="create">Criar sala privada</button></div>
-      <label>Servidor</label><input id="srv" placeholder="${import.meta.env.VITE_SERVER_URL ? 'padrão do site' : 'mesmo endereço do site (ex.: 192.168.0.10:3000)'}" value="${esc(profile.settings.server)}">
       <label>Entrar com código</label><div class="row"><input id="code" maxlength="5" placeholder="ABCDE" style="text-transform:uppercase"><button class="btn" id="join">Entrar</button></div>
       <div class="status" id="st"></div>
       <div class="row"><button class="btn ghost" data-go="menu">Voltar</button><button class="btn ghost" data-go="ranking">Ranking</button></div></div>`);
@@ -134,7 +145,6 @@ const SCREENS = {
     let busy = false;
     const act = async (msg) => {
       if (busy) return; busy = true;
-      profile.settings.server = ui.querySelector('#srv').value.trim(); saveProfile(profile);
       const until = Date.now() + 90000;
       for (let n = 1; ; n++) {
         st.textContent = n === 1 ? 'Conectando…' : `Acordando o servidor… pode levar até 1 min (tentativa ${n})`;
@@ -146,7 +156,7 @@ const SCREENS = {
         } catch (e) {
           if (transport instanceof NetTransport && !transport.everConnected) { transport.close(); transport = null; }
           const noServer = !import.meta.env.VITE_SERVER_URL && !profile.settings.server && /vercel\.app$|netlify\.app$|github\.io$/.test(location.hostname);
-          if (noServer) { st.textContent = 'Este site não tem servidor de jogo configurado. Preencha o campo Servidor (ex.: meu-servidor.onrender.com) ou jogue Contra bots.'; break; }
+          if (noServer) { st.textContent = 'Este site não tem servidor de jogo configurado. Defina um em Configurações → Servidor personalizado, ou jogue Contra bots.'; break; }
           if (Date.now() > until || !document.body.contains(st)) { st.textContent = e.message; break; }
           wakeServer();
           await new Promise((r) => setTimeout(r, 3000));
@@ -195,7 +205,7 @@ const SCREENS = {
       <label>Qualidade gráfica</label><div class="chips">${['baixa', 'media', 'alta'].map((q) => `<button class="chip ${s.quality === q ? 'on' : ''}" data-q="${q}">${{ baixa: 'Baixa', media: 'Média', alta: 'Alta' }[q]}</button>`).join('')}</div>
       <div class="desc">Baixa: resolução reduzida, sem sombras e árvores simplificadas. Alta: sombras e antisserrilhado.</div>
       <label>Volume</label><input type="range" id="vol" min="0" max="1" step="0.05" value="${s.volume}">
-      <label>Servidor multiplayer</label><input id="srv" value="${esc(s.server)}" placeholder="vazio = mesmo endereço do site">
+      <label>Servidor personalizado <small>(opcional: deixe vazio para usar o oficial)</small></label><input id="srv" value="${esc(s.server)}" placeholder="vazio = servidor oficial">
       <div class="row"><button class="btn ghost" data-go="menu">Voltar</button></div></div>`);
     ui.querySelectorAll('[data-q]').forEach((b) => b.addEventListener('click', () => {
       s.quality = b.dataset.q; saveProfile(profile); makeRenderer(); SCREENS.settings();
