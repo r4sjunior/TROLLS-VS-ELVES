@@ -1,0 +1,1 @@
+{ "name": "Raízes & Presas", "short_name": "Raízes", "start_url": "/", "display": "fullscreen", "orientation": "landscape", "background_color": "#0d1a1e", "theme_color": "#0d1a1e", "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }] }

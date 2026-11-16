@@ -1,0 +1,7 @@
+{
+  "appId": "com.raizesepresas.game",
+  "appName": "Raízes & Presas",
+  "webDir": "dist",
+  "android": { "allowMixedContent": true },
+  "server": { "androidScheme": "http", "cleartext": true }
+}

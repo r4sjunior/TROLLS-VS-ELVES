@@ -1,0 +1,27 @@
+{
+  "name": "raizes-e-presas",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Raízes & Presas — sobrevivência assimétrica Elfos vs Trolls para Android",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "server": "node server/index.js",
+    "start": "npm run build && node server/index.js",
+    "test": "node --test \"tests/*.test.js\"",
+    "cap:sync": "npm run build && npx cap sync android",
+    "apk": "npm run cap:sync && cd android && gradlew.bat assembleDebug"
+  },
+  "dependencies": {
+    "three": "0.170.0",
+    "ws": "8.18.0"
+  },
+  "devDependencies": {
+    "@capacitor/android": "6.2.0",
+    "@capacitor/cli": "6.2.0",
+    "@capacitor/core": "6.2.0",
+    "playwright-core": "^1.49.1",
+    "vite": "6.0.7"
+  }
+}

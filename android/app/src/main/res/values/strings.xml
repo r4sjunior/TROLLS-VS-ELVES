@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Raízes &amp; Presas</string>
+    <string name="title_activity_main">Raízes &amp; Presas</string>
+    <string name="package_name">com.raizesepresas.game</string>
+    <string name="custom_url_scheme">com.raizesepresas.game</string>
+</resources>

@@ -1,0 +1,40 @@
+// Captura do fluxo online: anfitrião cria sala privada, amigo entra pelo código, partida começa.
+import { chromium } from 'playwright-core';
+import { startServer, stopServer } from '../server/index.js';
+import fs from 'node:fs';
+const out = process.argv[2] || 'shots';
+fs.mkdirSync(out, { recursive: true });
+process.env.QUIET = '1';
+await startServer(3124);
+const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+const errors = [];
+async function player(name) {
+  const ctx = await browser.newContext({ viewport: { width: 915, height: 412 }, hasTouch: true });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => errors.push(name + ': ' + e));
+  await page.addInitScript((n) => localStorage.setItem('rp_profile_v1', JSON.stringify({ name: n, settings: { quality: 'baixa', volume: 0 } })), name);
+  await page.goto('http://localhost:3124/');
+  await page.waitForTimeout(1200);
+  await page.getByText('Multiplayer online').click();
+  return page;
+}
+const host = await player('Anfitriã');
+await host.getByText('Criar sala privada').click();
+await host.waitForSelector('.code');
+const code = await host.locator('.code').textContent();
+const guest = await player('Amigo');
+await guest.fill('#code', code);
+await guest.getByText('Entrar', { exact: true }).click();
+await guest.waitForTimeout(800);
+await guest.locator('[data-team="T"]').click();
+await guest.waitForTimeout(500);
+await host.screenshot({ path: `${out}/o1-lobby.png` });
+await host.getByText('Começar agora').click();
+await host.waitForTimeout(3000);
+await guest.keyboard.down('w'); await guest.waitForTimeout(800); await guest.keyboard.up('w');
+await host.screenshot({ path: `${out}/o2-host.png` });
+await guest.screenshot({ path: `${out}/o3-guest.png` });
+const st = async (p) => p.evaluate(() => { const w = window.__rp.world; return w && { team: w.me.team, phase: w.phase, players: w.players.size }; });
+console.log('anfitriã', JSON.stringify(await st(host)), 'amigo', JSON.stringify(await st(guest)), 'código', code);
+console.log('erros:', errors.length ? errors : 'nenhum');
+await browser.close(); await stopServer(); process.exit(0);
