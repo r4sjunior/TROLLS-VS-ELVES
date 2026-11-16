@@ -99,6 +99,17 @@ export class Game {
     if (!p.isBot) { p.takeover = !connected; if (!connected && !p.brain) p.brain = createBrain(this, p); }
   }
 
+  // Remove um jogador da partida em andamento (arena: bot cede a vaga a um humano).
+  // As construções dele continuam de pé e seguem úteis para a equipe.
+  removePlayer(pid) {
+    const p = this.players.get(pid); if (!p) return false;
+    this.units.delete(p.unitId);
+    this.vis.E.delete(p.unitId); this.vis.T.delete(p.unitId);
+    this.players.delete(pid);
+    this.projectiles = this.projectiles.filter((pr) => pr.target !== p.unitId);
+    return true;
+  }
+
   spawnUnit(p) {
     const id = this.nextId++;
     let x, y;

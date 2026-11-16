@@ -1,0 +1,13 @@
+# Blueprint do Render (render.com): servidor de jogo com WebSocket.
+# No painel do Render: New > Blueprint > escolha este repositório.
+services:
+  - type: web
+    name: trolls-vs-elves-server
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: node server/index.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"

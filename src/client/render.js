@@ -123,7 +123,10 @@ export class Renderer {
   resize() {
     const w = window.innerWidth, h = window.innerHeight;
     this.gl.setSize(w, h, false);
-    this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
+    this.camera.aspect = w / h;
+    // Telas menos largas que um celular deitado (tablet, monitor) ganham FOV maior para ver a mesma área
+    this.camera.fov = Math.max(45, Math.min(64, 45 * 2.2 / this.camera.aspect));
+    this.camera.updateProjectionMatrix();
   }
 
   // ---------------------------------------------------------------- mapa

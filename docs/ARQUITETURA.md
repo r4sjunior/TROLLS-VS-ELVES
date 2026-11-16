@@ -68,12 +68,21 @@ Cliente ──comandos──▶ Servidor (Game.handleCommand valida) ──step 
 | Cliente → servidor | Servidor → cliente |
 |---|---|
 | `hello {name, token?}` | `welcome {token, resumed}` |
-| `quick` / `create {settings}` / `join {code}` | `lobby {room}` / `error {msg}` |
+| `arena {team, cls}` (= `quick`) | `init {..., arena: true}` direto, sem lobby · `notice {msg}` (bot entrou/saiu) |
+| `create {settings}` / `join {code}` | `lobby {room}` / `error {msg}` |
 | `team {team: A/E/T, cls}` / `start` / `leave` | `init {seed, mapPreset, matchPreset, pid}` |
 | `cmd {cmd}` | `snap {...}` (20/s) / `res {ok:false, err}` |
 
 O mapa não trafega: o cliente o regenera a partir de `seed` + `mapPreset` (determinístico) e aplica só
 as mudanças de tiles.
+
+### Arena
+
+`Arena` (subclasse de `Room` em `server/index.js`) é uma partida pública contínua. O primeiro humano
+cria o `Game` vazio e entra na hora. A cada `ARENA_BOT_MS` entra um bot (`addBot`), que vira troll se faltar
+caçador (`wantTrolls(n)`: 0 com 1 jogador, 1 até 5 jogadores, 2 a partir de 6). Um humano novo remove um bot
+(`Game.removePlayer`) e reinicia a contagem. Quem sai vira bot. No fim, `onEnded` abre outra arena e move os
+conectados. Arena sem humanos é fechada para não gastar CPU.
 
 ## 4. Sistemas
 

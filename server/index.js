@@ -17,7 +17,9 @@ const PORT = Number(process.env.PORT || 3000);
 const MAX_PLAYERS = 10;
 const TROLLS = 2;
 const PUBLIC_WAIT_MS = 20000;
-const RECONNECT_GRACE_MS = 120000;
+const RECONNECT_GRACE_MS = 5 * 60000; // tempo que o lugar do jogador fica guardado
+const HEARTBEAT_MS = 5000;
+const MAX_BUFFERED = 512 * 1024; // cliente lento: pula snapshots em vez de acumular memória
 const BOT_ELVES = ['Lirael', 'Thandor', 'Sylwen', 'Aerin', 'Faelar', 'Nimue', 'Elowen', 'Caelum', 'Ithil', 'Mirren'];
 const BOT_TROLLS = ['Grokk', 'Zulmak', 'Rhaxa', 'Mograth'];
 
@@ -34,7 +36,10 @@ function saveRanking() {
 const sessions = new Map(); // token -> { token, name, ws, room, team, cls, lastMsgs }
 const rooms = new Map();
 
-const send = (ws, m) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); };
+const send = (ws, m) => {
+  if (!ws || ws.readyState !== 1) return false;
+  try { ws.send(JSON.stringify(m)); return true; } catch (e) { log('falha ao enviar', e.message); return false; }
+};
 const newCode = () => { let c; do { c = Array.from({ length: 5 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ'[crypto.randomInt(24)]).join(''); } while (rooms.has(c)); return c; };
 
 class Room {
@@ -143,14 +148,27 @@ class Room {
 
   tick() {
     const g = this.game;
-    g.step(DT);
+    try {
+      g.step(DT);
+      this.errors = 0;
+    } catch (e) {
+      // Um erro numa sala nunca derruba o servidor inteiro
+      this.errors = (this.errors || 0) + 1;
+      log(`erro na sala ${this.code} (tick ${g.tick}):`, e.stack || e);
+      if (this.errors > 40) { log(`sala ${this.code} encerrada por erros repetidos`); this.destroy(); }
+      return;
+    }
     for (const tok of this.members) {
       const s = sessions.get(tok);
       if (!s || !s.ws || s.room !== this) continue;
-      const pid = this.pids.get(tok);
-      const snap = g.snapshot(pid, this.sent.get(tok) || 0);
-      this.sent.set(tok, g.tick);
-      send(s.ws, snap);
+      // Contrapressão: se o cliente não está dando conta, pula este envio;
+      // o próximo snapshot delta cobre tudo que mudou desde o último entregue.
+      if (s.ws.bufferedAmount > MAX_BUFFERED) continue;
+      try {
+        const pid = this.pids.get(tok);
+        const snap = g.snapshot(pid, this.sent.get(tok) || 0);
+        if (send(s.ws, snap)) this.sent.set(tok, g.tick);
+      } catch (e) { log(`erro no snapshot ${this.code}:`, e.stack || e); }
     }
     if (g.over && !this.ended) {
       this.ended = true;
@@ -161,19 +179,157 @@ class Room {
       }
       saveRanking();
       log(`sala ${this.code} terminou: vitória ${g.over.winner === 'E' ? 'dos elfos' : 'dos trolls'}`);
-      setTimeout(() => this.destroy(), 30000);
+      if (this.isArena) this.onEnded();
+      else setTimeout(() => this.destroy(), 30000).unref();
     }
   }
 
   destroy() {
     clearInterval(this.lobbyTimer); clearInterval(this.loop);
     for (const t of this.members) { const s = sessions.get(t); if (s && s.room === this) s.room = null; }
-    rooms.delete(this.code);
+    if (rooms.get(this.code) === this) rooms.delete(this.code);
   }
+}
+
+// ---------------------------------------------------------------- arena (partida pública contínua)
+// Regras:
+//  - A arena fica sempre aberta. O 1º humano que entra inicia a partida na hora.
+//  - A cada ARENA_BOT_MS (1 min) sem novidades entra UM bot, até completar 10 vagas.
+//  - Quando entra mais um humano, um bot sai para dar a vaga a ele e a contagem de 1 min recomeça.
+//  - Quando a partida acaba, uma nova arena abre sozinha e quem ainda está conectado é levado para ela.
+const ARENA_BOT_MS = Number(process.env.ARENA_BOT_MS || 60000);
+const ARENA_NEXT_MS = Number(process.env.ARENA_NEXT_MS || 15000);
+const MAX_TROLLS = 2, MAX_ELVES = MAX_PLAYERS - MAX_TROLLS;
+const wantTrolls = (n) => (n <= 1 ? 0 : n >= 6 ? 2 : 1);
+
+class Arena extends Room {
+  constructor() {
+    super(false, { map: Object.keys(MAP_PRESETS)[crypto.randomInt(Object.keys(MAP_PRESETS).length)], match: 'padrao', difficulty: 'normal' });
+    clearInterval(this.lobbyTimer);
+    this.isArena = true;
+    this.state = 'waiting';
+    this.nextPid = 1;
+    this.nextBotAt = 0;
+    this.botN = 0;
+  }
+
+  counts() {
+    const c = { E: 0, T: 0, bots: 0, total: 0 };
+    for (const p of this.game.players.values()) { c[p.team]++; c.total++; if (p.isBot) c.bots++; }
+    return c;
+  }
+  open() { return !this.ended && (this.state === 'waiting' || (this.game && this.game.time < this.game.duration - 45)); }
+  hasHumanSlot() { if (this.state === 'waiting') return true; const c = this.counts(); return c.bots > 0 || c.total < MAX_PLAYERS; }
+
+  startGame() {
+    this.state = 'playing';
+    this.game = new Game({ seed: crypto.randomInt(1e9), mapPreset: this.settings.map, matchPreset: this.settings.match, players: [] });
+    this.loop = setInterval(() => this.tick(), DT * 1000);
+    log(`arena ${this.code} aberta (${this.settings.map})`);
+  }
+
+  notice(msg, except) { for (const t of this.members) if (t !== except) { const s = sessions.get(t); send(s && s.ws, { t: 'notice', msg }); } }
+
+  join(s, pref = 'A', cls = 'cacador') {
+    if (!this.open() || !this.hasHumanSlot()) return 'Arena cheia';
+    if (s.room && s.room !== this) s.room.leave(s);
+    if (this.state === 'waiting') this.startGame();
+    const g = this.game;
+    let c = this.counts();
+    // Escolhe a equipe: preferência do jogador quando há vaga, senão a que equilibra a partida
+    const after = c.bots > 0 ? c.total : c.total + 1; // com bot na sala, um deles cede a vaga
+    let team;
+    if (pref === 'T' && (c.T < MAX_TROLLS || this.botOf('T'))) team = 'T';
+    else if (pref === 'E' && (c.E < MAX_ELVES || this.botOf('E'))) team = 'E';
+    else team = c.T < wantTrolls(after) || c.E >= MAX_ELVES ? 'T' : 'E';
+    // Um bot cai para dar lugar ao humano (de preferência da mesma equipe)
+    let replaced = null;
+    if (c.bots > 0) {
+      replaced = this.botOf(team) || this.botOf(team === 'E' ? 'T' : 'E');
+      g.removePlayer(replaced.id);
+    }
+    c = this.counts();
+    if (c.total >= MAX_PLAYERS) return 'Arena cheia';
+    if ((team === 'T' && c.T >= MAX_TROLLS) || (team === 'E' && c.E >= MAX_ELVES)) team = team === 'T' ? 'E' : 'T';
+    const pid = this.nextPid++;
+    g.addPlayer({ id: pid, name: s.name, team, cls: typeof cls === 'string' && Object.hasOwn(TROLL_CLASSES, cls) ? cls : 'cacador', isBot: false });
+    if (!this.members.includes(s.token)) this.members.push(s.token);
+    this.pids.set(s.token, pid);
+    s.room = this; s.team = pref; s.cls = cls;
+    this.nextBotAt = Date.now() + ARENA_BOT_MS; // recomeça a contagem de 1 min
+    this.sendInit(s);
+    this.notice(replaced ? `${s.name} entrou no lugar do bot ${replaced.name}` : `${s.name} entrou na partida (${team === 'E' ? 'elfos' : 'trolls'})`, s.token);
+    log(`arena ${this.code}: ${s.name} entrou como ${team}${replaced ? `, bot ${replaced.name} saiu` : ''}`);
+    return null;
+  }
+
+  botOf(team) {
+    let pick = null;
+    for (const p of this.game.players.values()) if (p.isBot && p.team === team) pick = p; // o mais recente sai primeiro
+    return pick;
+  }
+
+  addBot() {
+    const c = this.counts();
+    if (c.total >= MAX_PLAYERS) return;
+    const team = (c.T < wantTrolls(c.total + 1) || c.E >= MAX_ELVES) && c.T < MAX_TROLLS ? 'T' : 'E';
+    const classes = Object.keys(TROLL_CLASSES);
+    const n = this.botN++;
+    const name = team === 'E' ? BOT_ELVES[n % BOT_ELVES.length] : BOT_TROLLS[n % BOT_TROLLS.length];
+    this.game.addPlayer({ id: this.nextPid++, name, team, cls: classes[n % classes.length], isBot: true, difficulty: this.settings.difficulty, skin: n % 6 });
+    this.notice(`Bot ${name} entrou (${team === 'E' ? 'elfos' : 'trolls'}) · ${c.total + 1}/${MAX_PLAYERS}`);
+  }
+
+  sendInit(s) {
+    const pid = this.pids.get(s.token);
+    this.sent.set(s.token, 0);
+    send(s.ws, { ...this.game.initInfo(pid), arena: true });
+  }
+
+  leave(s) {
+    const pid = this.pids.get(s.token);
+    const p = this.game && this.game.players.get(pid);
+    if (p) { this.game.setConnected(pid, false); p.isBot = true; p.takeover = false; p.connected = true; }
+    this.members = this.members.filter((t) => t !== s.token);
+    this.pids.delete(s.token);
+    if (s.room === this) s.room = null;
+    if (p && !this.ended) this.notice(`${p.name} saiu; um bot assumiu o personagem`);
+  }
+
+  tick() {
+    super.tick();
+    if (!this.game || rooms.get(this.code) !== this) return;
+    if (this.game.tick % 20 !== 0) return; // regras da arena 1x por segundo
+    if (!this.members.length) { log(`arena ${this.code} fechada: sem humanos`); this.destroy(); return; }
+    if (!this.ended && Date.now() >= this.nextBotAt && this.counts().total < MAX_PLAYERS) {
+      this.addBot();
+      this.nextBotAt = Date.now() + ARENA_BOT_MS;
+    }
+  }
+
+  // Fim de partida: abre a próxima arena e leva quem ainda está aqui
+  onEnded() {
+    this.notice(`Nova partida em ${Math.round(ARENA_NEXT_MS / 1000)}s`);
+    setTimeout(() => {
+      const stay = this.members.map((t) => sessions.get(t)).filter((s) => s && s.room === this && s.ws);
+      this.destroy();
+      for (const s of stay) { s.room = null; joinArena(s, s.team, s.cls); }
+    }, ARENA_NEXT_MS).unref();
+  }
+}
+
+function joinArena(s, pref, cls) {
+  for (const r of rooms.values()) if (r.isArena && r.open() && r.hasHumanSlot() && !r.join(s, pref, cls)) return null;
+  const a = new Arena();
+  return a.join(s, pref, cls);
 }
 
 // ---------------------------------------------------------------- mensagens
 function onMessage(ws, raw) {
+  try { handleMessage(ws, raw); } catch (e) { log('erro ao tratar mensagem:', e.stack || e); }
+}
+
+function handleMessage(ws, raw) {
   if (raw.length > 4096) return;
   let m; try { m = JSON.parse(raw); } catch { return; }
   if (!m || typeof m.t !== 'string') return;
@@ -204,10 +360,10 @@ function onMessage(ws, raw) {
   if (++s.bucket.n > 80) return;
 
   switch (m.t) {
-    case 'quick': {
-      let room = [...rooms.values()].find((r) => !r.isPrivate && r.state === 'lobby' && r.members.length < MAX_PLAYERS);
-      if (!room) room = new Room(false);
-      const err = room.join(s); if (err) send(ws, { t: 'error', msg: err });
+    case 'quick': case 'arena': {
+      if (s.room && s.room.isArena && s.room.state === 'playing') { s.room.sendInit(s); break; }
+      const pref = ['A', 'E', 'T'].includes(m.team) ? m.team : 'A';
+      const err = joinArena(s, pref, m.cls); if (err) send(ws, { t: 'error', msg: err });
       break;
     }
     case 'create': { const room = new Room(true, m.settings || {}); room.join(s); break; }
@@ -253,7 +409,8 @@ function onClose(ws) {
 // ---------------------------------------------------------------- HTTP (build do jogo + API)
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.ico': 'image/x-icon' };
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://x');
+  let url;
+  try { url = new URL(req.url, 'http://x'); decodeURIComponent(url.pathname); } catch { res.writeHead(400); res.end(); return; }
   if (url.pathname === '/api/ranking') {
     res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
     res.end(JSON.stringify(Object.values(ranking).sort((a, b) => b.wins - a.wins || b.kills - a.kills).slice(0, 50)));
@@ -268,21 +425,48 @@ const server = http.createServer((req, res) => {
   if (!file.startsWith(DIST)) { res.writeHead(403); res.end(); return; }
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(DIST, 'index.html');
   if (!fs.existsSync(file)) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }); res.end('Rode "npm run build" antes de iniciar o servidor.'); return; }
-  res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream' });
-  fs.createReadStream(file).pipe(res);
+  res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream', 'cache-control': file.endsWith('index.html') ? 'no-cache' : 'public, max-age=31536000, immutable' });
+  fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
 });
 
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 8192 });
-wss.on('connection', (ws) => {
-  ws.on('message', (data) => onMessage(ws, data.toString()));
-  ws.on('close', () => onClose(ws));
-  ws.on('error', () => {});
+const wss = new WebSocketServer({
+  server, path: '/ws', maxPayload: 8192,
+  perMessageDeflate: { threshold: 512, zlibDeflateOptions: { level: 3 } }, // ~4x menos banda no Wi-Fi/4G
 });
+wss.on('connection', (ws) => {
+  ws.alive = true;
+  ws.on('pong', () => { ws.alive = true; });
+  ws.on('message', (data) => { ws.alive = true; onMessage(ws, data.toString()); });
+  ws.on('close', () => { try { onClose(ws); } catch (e) { log('erro no close:', e.stack || e); } });
+  ws.on('error', (e) => log('erro de socket:', e.message));
+});
+// Batimento: derruba conexões mortas (celular sem sinal, aba suspensa) para a IA assumir na hora
+const heartbeat = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!ws.alive) { ws.terminate(); continue; }
+    ws.alive = false;
+    try { ws.ping(); } catch { /* ignora */ }
+  }
+}, HEARTBEAT_MS);
+heartbeat.unref();
+
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    console.error(`A porta ${PORT} já está em uso: provavelmente o servidor já está rodando em outra janela. Feche-o ou use PORT=3001.`);
+    process.exit(1);
+  }
+  log('erro no servidor HTTP:', e.stack || e);
+});
+process.on('uncaughtException', (e) => log('exceção não tratada (servidor segue no ar):', e.stack || e));
+process.on('unhandledRejection', (e) => log('promise rejeitada (servidor segue no ar):', e && (e.stack || e)));
+
+export const _internals = { rooms, sessions }; // só para testes
 
 export function startServer(port = PORT) {
   return new Promise((resolve) => server.listen(port, () => { log(`Raízes & Presas no ar: http://localhost:${server.address().port}`); resolve(server); }));
 }
 export function stopServer() {
+  clearInterval(heartbeat);
   for (const r of rooms.values()) r.destroy();
   wss.close(); return new Promise((r) => server.close(r));
 }

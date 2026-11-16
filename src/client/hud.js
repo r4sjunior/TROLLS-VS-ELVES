@@ -16,6 +16,8 @@ const ICON = {
   gold: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="#e8b830"/><circle cx="12" cy="12" r="5" fill="none" stroke="#a87a10" stroke-width="1.6"/></svg>',
   crystal: '<svg viewBox="0 0 24 24"><path d="M12 2 19 9 12 22 5 9Z" fill="#a98bff"/><path d="M12 2v20M5 9h14" stroke="#6a4fd0" stroke-width="1"/></svg>',
 };
+// Fator de escala do HUD (definido em main.js); coordenadas de tela precisam ser divididas por ele
+export const hudZoom = () => parseFloat(document.documentElement.style.getPropertyValue('--hud-z')) || 1;
 const RES_NAME = { wood: 'madeira', gold: 'ouro', crystal: 'cristal' };
 const costHtml = (cost) => Object.entries(cost).map(([k, v]) => `<span class="cost">${ICON[k]}${v}</span>`).join('');
 const fmtTime = (s) => { s = Math.max(0, Math.ceil(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
@@ -52,8 +54,7 @@ export class Hud {
     <div class="hud-top-center"><div class="phase" id="h-phase"></div><div class="timer" id="h-timer"></div><div class="event hidden" id="h-event"></div></div>
     <div class="hud-top-right">
       <div class="mini-wrap"><canvas id="h-mini" width="140" height="140"></canvas></div>
-      <div class="res" id="h-res"></div>
-      <div class="mini-buttons"><button class="small" id="h-prog" title="Progressão (Tab)">${ICON.bag}</button><button class="small" id="h-menu" title="Menu (Esc)">${ICON.menu}</button></div>
+      <div class="hud-row"><div class="res" id="h-res"></div><button class="small" id="h-prog" title="Progressão (Tab)">${ICON.bag}</button><button class="small" id="h-menu" title="Menu (Esc)">${ICON.menu}</button></div>
     </div>
     <div class="toasts" id="h-toasts"></div>
     <div class="joy hidden" id="h-joy"><div class="knob" id="h-knob"></div></div>
@@ -162,7 +163,8 @@ export class Hud {
     if (leftZone && !this.joy) {
       this.joy = { id: e.pointerId, x: e.clientX, y: e.clientY };
       const j = this.$('#h-joy'); j.classList.remove('hidden');
-      j.style.left = `${e.clientX}px`; j.style.top = `${e.clientY}px`;
+      const z = hudZoom();
+      j.style.left = `${e.clientX / z}px`; j.style.top = `${e.clientY / z}px`;
       return;
     }
     if (this.build) this.moveGhost(e.clientX, e.clientY);
@@ -182,6 +184,8 @@ export class Hud {
     p.x = e.clientX; p.y = e.clientY;
     if (this.joy && this.joy.id === e.pointerId) {
       let dx = e.clientX - this.joy.x, dy = e.clientY - this.joy.y;
+      const z = hudZoom();
+      dx /= z; dy /= z;
       const m = Math.hypot(dx, dy), R = 56;
       if (m > R) { dx = dx / m * R; dy = dy / m * R; }
       this.$('#h-knob').style.transform = `translate(${dx}px, ${dy}px)`;
@@ -552,7 +556,8 @@ export class Hud {
     for (let i = this.floaters.length - 1; i >= 0; i--) {
       const f = this.floaters[i]; f.t += dt;
       const p = this.r.project(f.x, f.y, 1.6 + f.t * 1.4);
-      f.el.style.transform = `translate(${p.x}px, ${p.y}px)`; f.el.style.opacity = String(1 - f.t / 0.9);
+      const z = hudZoom();
+      f.el.style.transform = `translate(${p.x / z}px, ${p.y / z}px)`; f.el.style.opacity = String(1 - f.t / 0.9);
       if (f.t > 0.9) { f.el.remove(); this.floaters.splice(i, 1); }
     }
   }

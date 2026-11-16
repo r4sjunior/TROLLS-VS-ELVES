@@ -104,12 +104,9 @@ test('partida rápida pública e mensagens inválidas', async () => {
   await c.wait((m) => m.t === 'welcome');
   c.ws.send('isto não é json');
   c.ws.send(JSON.stringify({ t: 'cmd', cmd: { t: 'build', type: 'constructor' } }));
-  c.send({ t: 'quick' });
-  const lob = await c.wait((m) => m.t === 'lobby');
-  assert.equal(lob.room.isPrivate, false);
-  assert.ok(lob.room.startsIn > 0);
-  c.send({ t: 'start' });
+  c.send({ t: 'quick' }); // partida rápida = arena (começa na hora)
   const init = await c.wait((m) => m.t === 'init');
   assert.ok(init.seed >= 0);
+  assert.equal(init.arena, true);
   c.ws.close();
 });

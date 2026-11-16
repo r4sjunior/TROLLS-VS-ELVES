@@ -10,11 +10,29 @@ import { MAP_PRESETS } from '../shared/mapgen.js';
 import { ELF_SKINS } from './models.js';
 
 const profile = loadProfile();
+
+// Responsividade: tudo é desenhado para um celular deitado de referência (915×412)
+// e escalado para a tela real — de celulares pequenos a monitores 4K.
+function applyScale() {
+  const w = window.innerWidth, h = window.innerHeight;
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const hud = clamp(Math.min(w / 915, h / 412), 0.72, 1.8);
+  const uiz = clamp(Math.min(w / 860, h / 440), 0.8, 1.5);
+  const root = document.documentElement.style;
+  root.setProperty('--hud-z', hud.toFixed(3));
+  root.setProperty('--ui-z', uiz.toFixed(3));
+}
+applyScale();
+window.addEventListener('resize', applyScale);
+window.addEventListener('orientationchange', () => setTimeout(applyScale, 200));
 setVolume(profile.settings.volume);
 const ui = document.getElementById('ui');
 const hudRoot = document.getElementById('hud');
 let renderer, menuWorld, world = null, hud = null, transport = null, inGame = false, paused = false;
-let lastInput = '', lastInputAt = 0, endShown = false, lastLocalOpts = null, orbit = 0;
+let lastInput = '', lastInputAt = 0, endShown = false, lastLocalOpts = null, orbit = 0, arenaMode = false;
+const arenaPref = { team: 'A', cls: 'cacador' };
+try { Object.assign(arenaPref, JSON.parse(localStorage.getItem('rp_arena') || '{}')); } catch { /* sem storage */ }
+const saveArenaPref = () => { try { localStorage.setItem('rp_arena', JSON.stringify(arenaPref)); } catch { /* ignora */ } };
 
 const ELF_NAMES = ['Lirael', 'Thandor', 'Sylwen', 'Aerin', 'Faelar', 'Nimue', 'Elowen', 'Caelum', 'Ithil', 'Mirren', 'Galen', 'Yavanna'];
 const TROLL_NAMES = ['Grokk', 'Zulmak', 'Rhaxa', 'Mograth', 'Vurk', 'Thrash'];
@@ -37,8 +55,13 @@ function serverUrl() {
     if (!/^wss?:\/\//.test(s)) s = (s.startsWith('localhost') || /^\d/.test(s) ? 'ws://' : 'wss://') + s;
     return s.replace(/\/$/, '') + (s.endsWith('/ws') ? '' : '/ws');
   }
+  // Site estático (ex.: Vercel) aponta para o servidor de jogo definido no build: VITE_SERVER_URL
+  const env = import.meta.env.VITE_SERVER_URL;
+  if (env) { const e = env.trim().replace(/\/$/, '').replace(/^http/, 'ws'); return e.endsWith('/ws') ? e : e + '/ws'; }
   return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
 }
+// Servidores gratuitos (Render etc.) dormem sem uso: um GET acorda antes de conectar
+const wakeServer = () => fetch(httpBase() + '/api/health', { cache: 'no-store' }).then((r) => r.ok).catch(() => false);
 const httpBase = () => serverUrl().replace(/^ws/, 'http').replace(/\/ws$/, '');
 
 // ---------------------------------------------------------------- telas
@@ -96,23 +119,42 @@ const SCREENS = {
 
   online() {
     screen(`<div class="card wide"><h2>Multiplayer online</h2>
-      <div class="desc">Até 10 jogadores. Vagas vazias são preenchidas por bots, e se você cair a IA segura seu personagem até você reconectar.</div>
-      <label>Servidor</label><input id="srv" placeholder="mesmo endereço do site (ex.: 192.168.0.10:3000)" value="${esc(profile.settings.server)}">
-      <div class="row"><button class="btn hero" id="quick">Partida rápida</button><button class="btn" id="create">Criar sala privada</button></div>
+      <div class="desc"><b>Arena:</b> entre e a partida começa na hora. A cada 1 min entra um bot até fechar 10 vagas; quando chega outro humano, um bot sai para dar lugar. Ao terminar, a próxima partida abre sozinha. Se você cair, a IA segura seu personagem até você voltar.</div>
+      <label>Equipe preferida</label><div class="chips">${['A', 'E', 'T'].map((t) => `<button class="chip ${arenaPref.team === t ? 'on' : ''}" data-team="${t}">${{ A: 'Automática', E: 'Elfos', T: 'Trolls' }[t]}</button>`).join('')}</div>
+      ${arenaPref.team === 'T' ? `<div class="chips">${Object.entries(TROLL_CLASSES).map(([k, c]) => `<button class="chip ${arenaPref.cls === k ? 'on' : ''}" data-cls="${k}">${c.name}</button>`).join('')}</div>` : ''}
+      <div class="row"><button class="btn hero" id="quick">Entrar na arena</button><button class="btn" id="create">Criar sala privada</button></div>
+      <label>Servidor</label><input id="srv" placeholder="${import.meta.env.VITE_SERVER_URL ? 'padrão do site' : 'mesmo endereço do site (ex.: 192.168.0.10:3000)'}" value="${esc(profile.settings.server)}">
       <label>Entrar com código</label><div class="row"><input id="code" maxlength="5" placeholder="ABCDE" style="text-transform:uppercase"><button class="btn" id="join">Entrar</button></div>
       <div class="status" id="st"></div>
       <div class="row"><button class="btn ghost" data-go="menu">Voltar</button><button class="btn ghost" data-go="ranking">Ranking</button></div></div>`);
     const st = ui.querySelector('#st');
+    ui.querySelectorAll('[data-team]').forEach((b) => b.addEventListener('click', () => { sfx('click'); arenaPref.team = b.dataset.team; saveArenaPref(); SCREENS.online(); }));
+    ui.querySelectorAll('[data-cls]').forEach((b) => b.addEventListener('click', () => { sfx('click'); arenaPref.cls = b.dataset.cls; saveArenaPref(); SCREENS.online(); }));
+    wakeServer();
+    let busy = false;
     const act = async (msg) => {
+      if (busy) return; busy = true;
       profile.settings.server = ui.querySelector('#srv').value.trim(); saveProfile(profile);
-      st.textContent = 'Conectando…';
-      try {
-        await connectNet();
-        transport.raw(msg);
-        st.textContent = 'Conectado.';
-      } catch (e) { st.textContent = e.message; }
+      const until = Date.now() + 90000;
+      for (let n = 1; ; n++) {
+        st.textContent = n === 1 ? 'Conectando…' : `Acordando o servidor… pode levar até 1 min (tentativa ${n})`;
+        try {
+          await connectNet();
+          transport.raw(msg);
+          st.textContent = 'Conectado. Entrando…';
+          break;
+        } catch (e) {
+          if (transport instanceof NetTransport && !transport.everConnected) { transport.close(); transport = null; }
+          const noServer = !import.meta.env.VITE_SERVER_URL && !profile.settings.server && /vercel\.app$|netlify\.app$|github\.io$/.test(location.hostname);
+          if (noServer) { st.textContent = 'Este site não tem servidor de jogo configurado. Preencha o campo Servidor (ex.: meu-servidor.onrender.com) ou jogue Contra bots.'; break; }
+          if (Date.now() > until || !document.body.contains(st)) { st.textContent = e.message; break; }
+          wakeServer();
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      }
+      busy = false;
     };
-    ui.querySelector('#quick').addEventListener('click', () => act({ t: 'quick' }));
+    ui.querySelector('#quick').addEventListener('click', () => act({ t: 'arena', team: arenaPref.team, cls: arenaPref.cls }));
     ui.querySelector('#create').addEventListener('click', () => act({ t: 'create', settings: { map: 'floresta', match: 'padrao', difficulty: 'normal' } }));
     ui.querySelector('#join').addEventListener('click', () => { const c = ui.querySelector('#code').value.trim().toUpperCase(); if (c) act({ t: 'join', code: c }); });
   },
@@ -196,8 +238,18 @@ async function connectNet() {
   const tr = new NetTransport(serverUrl());
   beginGame(tr, false);
   tr.on('lobby', (m) => renderLobby(m.room));
+  tr.on('notice', (m) => { if (hud) hud.toast(m.msg); });
   tr.on('error', (m) => { if (hud) hud.toast(m.msg, 'warn'); else { const st = ui.querySelector('#st'); if (st) st.textContent = m.msg; } });
-  tr.on('disconnect', () => { if (hud) hud.toast('Conexão perdida, tentando reconectar…', 'warn'); });
+  tr.on('disconnect', () => setNet(true));
+  tr.on('reconnecting', (m) => setNet(true, m.attempt));
+  tr.on('reconnected', (m) => {
+    setNet(false);
+    // O servidor reiniciou e a partida antiga não existe mais
+    if (inGame && !m.resumed) {
+      leaveGame();
+      screen('<div class="card"><h2>A partida foi encerrada</h2><p class="desc">O servidor reiniciou e a sala anterior não existe mais.</p><button class="btn hero" data-go="online">Voltar ao multiplayer</button></div>');
+    }
+  });
   await tr.connect(profile.name || 'Jogador');
 }
 
@@ -218,11 +270,36 @@ function renderLobby(room) {
   const st = ui.querySelector('#start'); if (st) st.addEventListener('click', () => transport.raw({ t: 'start' }));
 }
 
+// Aviso persistente de conexão (some sozinho quando os dados voltam)
+function setNet(down, attempt = 0) {
+  let el = document.getElementById('net');
+  if (!el) { el = document.createElement('div'); el.id = 'net'; document.body.appendChild(el); }
+  el.className = down ? 'on' : '';
+  el.textContent = attempt > 3 ? `Sem conexão com o servidor… tentativa ${attempt}` : 'Reconectando…';
+}
+
+// Mantém a tela acesa durante a partida (evita o celular suspender a aba e derrubar a conexão)
+let wakeLock = null;
+async function keepAwake(on) {
+  try {
+    if (on && 'wakeLock' in navigator && document.visibilityState === 'visible' && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } else if (!on && wakeLock) { await wakeLock.release(); wakeLock = null; }
+  } catch { wakeLock = null; }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && inGame) keepAwake(true);
+  // partida local pausa sozinha quando o app vai para segundo plano
+  if (document.visibilityState === 'hidden' && inGame && transport instanceof LocalTransport && !paused) openPause();
+});
+
 function beginGame(tr, local = true) {
   transport = tr;
   endShown = false;
   tr.on('init', (m) => {
     if (hud) { hud.destroy(); hud = null; }
+    endShown = false; arenaMode = !!m.arena;
     world = new ClientWorld(m);
     renderer.setWorld(world);
     renderer.zoom = 0.85;
@@ -231,10 +308,13 @@ function beginGame(tr, local = true) {
     world.on('fx', (list) => { const u = world.myUnit(); renderer.fx(list, u); hud.onFx(list); });
     inGame = true; paused = false;
     ui.className = 'ui hidden'; ui.innerHTML = '';
+    setNet(false);
+    keepAwake(true);
     tryLandscape();
   });
   tr.on('snap', (s) => {
     if (!world) return;
+    if (document.getElementById('net')?.className === 'on') setNet(false);
     world.apply(s);
     if (s.over && !endShown) { endShown = true; setTimeout(() => showEnd(s.over), 1200); }
   });
@@ -265,6 +345,7 @@ function leaveGame() {
   transport = null;
   if (hud) { hud.destroy(); hud = null; }
   world = null; inGame = false; paused = false;
+  setNet(false); keepAwake(false);
   renderer.setWorld(menuWorld); renderer.zoom = 1.25;
 }
 
@@ -280,7 +361,8 @@ function showEnd(over) {
     <h2>${won ? 'Vitória!' : 'Derrota'}</h2>
     <div class="rewards">+${rw.xp} XP de conta${rw.levelUp ? ` · Nível ${profile.level}!` : ''}${rw.unlocked.length ? `<br>Conquistas: ${rw.unlocked.map((id) => ACHIEVEMENTS.find((a) => a.id === id).name).join(', ')}` : ''}</div>
     <table><tr><th>Jogador</th><th>Classe</th><th>Nv</th><th></th><th>Abates</th><th>Constr.</th><th>Destr.</th></tr>${rows}</table>
-    <div class="row"><button class="btn ghost" id="menu">Menu</button>${transport instanceof LocalTransport ? '<button class="btn hero" id="again">Jogar de novo</button>' : ''}</div></div>`, 'overlay');
+    ${arenaMode ? '<div class="desc">A próxima partida da arena começa sozinha em instantes…</div>' : ''}
+    <div class="row"><button class="btn ghost" id="menu">${arenaMode ? 'Sair da arena' : 'Menu'}</button>${transport instanceof LocalTransport ? '<button class="btn hero" id="again">Jogar de novo</button>' : ''}</div></div>`, 'overlay');
   ui.querySelector('#menu').addEventListener('click', () => { leaveGame(); SCREENS.menu(); });
   const ag = ui.querySelector('#again'); if (ag) ag.addEventListener('click', () => { leaveGame(); startLocal(lastLocalOpts); });
 }
