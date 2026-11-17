@@ -1,6 +1,10 @@
 // Definições de dados do jogo. Tudo que é "número de balanceamento" mora aqui,
 // para que servidor, cliente e testes usem exatamente os mesmos valores.
 
+// Versão do protocolo/simulação: cliente e servidor precisam ser iguais (o mapa é gerado dos dois lados).
+// Aumente sempre que mudar mapgen, regras ou o formato dos snapshots.
+export const PROTOCOL = 5;
+
 export const TICK_RATE = 20;
 export const DT = 1 / TICK_RATE;
 
@@ -75,6 +79,8 @@ export const BUILDINGS = {
   extrator: { name: 'Extrator de Ouro', cat: 'economia', w: 2, h: 2, cost: { wood: 60, gold: 30 }, time: 6, hp: 560, armor: 2, income: { gold: 2.0 } },
 
   arvore: { name: 'Árvore Ancestral', cat: 'especiais', w: 2, h: 2, cost: { wood: 80, gold: 50, crystal: 3 }, time: 10, hp: 950, armor: 3, income: { crystal: 0.1 }, unlocks: true },
+  ninho: { name: 'Ninho de Fadas', cat: 'economia', w: 2, h: 2, cost: { wood: 45, gold: 20 }, time: 5, hp: 420, armor: 1, gather: { radius: 4.5, rate: 1.4 } },
+  oficina: { name: 'Oficina de Reparos', cat: 'economia', w: 2, h: 2, cost: { wood: 40, gold: 25 }, time: 5, hp: 520, armor: 2, autoRepair: { radius: 6.5, rate: 22 } },
   altar: { name: 'Altar de Renascimento', cat: 'especiais', w: 2, h: 2, cost: { gold: 70, crystal: 8 }, time: 8, hp: 750, armor: 3, revive: { delay: 20, cooldown: 45 }, req: 'arvore' },
 };
 
@@ -151,12 +157,46 @@ export const ANCESTRAL = {
   ability: { id: 'rugido', name: 'Rugido Ancestral', cd: 30, desc: 'Atordoa elfos próximos por 2s e revela todos por 5s.' },
 };
 
+// Loja do troll: cada nível custa o dobro do anterior
+const doubling = (base) => (l) => ({ gold: base * 2 ** l });
 export const TROLL_UPGRADES = {
-  forca: { name: 'Força Bruta', desc: '+15% dano', max: 5, cost: (l) => ({ gold: 30 + 25 * l }) },
-  pele: { name: 'Pele de Pedra', desc: '+18% vida, +1 armadura', max: 5, cost: (l) => ({ gold: 30 + 25 * l }) },
-  impeto: { name: 'Ímpeto', desc: '+6% velocidade', max: 4, cost: (l) => ({ gold: 35 + 30 * l }) },
-  garras: { name: 'Garras de Cerco', desc: '+30% dano em construções', max: 4, cost: (l) => ({ gold: 40 + 30 * l }) },
+  forca: { name: 'Lâmina Serrilhada', desc: '+15% dano', max: 6, cost: doubling(35) },
+  pele: { name: 'Couraça de Pedra', desc: '+18% vida, +1 armadura', max: 6, cost: doubling(35) },
+  emblema: { name: 'Emblema do Pântano', desc: '+0,6% vida/s de regeneração', max: 5, cost: doubling(30) },
+  luvas: { name: 'Manoplas Ligeiras', desc: '+12% velocidade de ataque', max: 5, cost: doubling(40) },
+  impeto: { name: 'Botas de Ímpeto', desc: '+6% velocidade', max: 4, cost: doubling(40) },
+  garras: { name: 'Garras de Cerco', desc: '+30% dano em construções', max: 5, cost: doubling(45) },
 };
+
+// ---------------- Pós-morte: o elfo abatido escolhe um lado ----------------
+// Espírito: continua com os elfos, atravessa construções, não pode ser atacado.
+export const SPIRIT = {
+  name: 'Espírito Guardião', hp: 200, speed: 5.2, radius: 0.3, vision: 11,
+  repairRate: 26, // reparo grátis ao segurar Reparar
+  abilities: [
+    { id: 'bencao', name: 'Bênção', cd: 14, desc: 'Cura 35% da construção aliada mais próxima.' },
+    { id: 'egide', name: 'Égide', cd: 30, dur: 6, desc: 'Construção mais próxima fica invulnerável por 6s.' },
+    { id: 'geada', name: 'Geada', cd: 20, dur: 3, desc: 'Congela trolls num raio de 4: lentos e revelados por 3s.' },
+  ],
+};
+// Lobo: passa para o lado dos trolls e caça junto com eles.
+export const WOLF = {
+  name: 'Lobo Sombrio', desc: 'Elfo que se rendeu à caçada.',
+  hp: 520, speed: 5.0, radius: 0.42, vision: 11, armor: 1,
+  atk: { range: 1.0, dmg: 18, rate: 0.75 }, bldMul: 0.8,
+  abilities: [
+    { id: 'uivo', name: 'Uivo', cd: 24, dur: 4, desc: 'Revela elfos num raio de 26 por 4s.' },
+    { id: 'investida', name: 'Investida', cd: 9, desc: 'Salta para a frente.' },
+  ],
+};
+export const AFTERLIFE_DELAY = 3;   // segundos até poder escolher
+export const AFTERLIFE_TIMEOUT = 25; // sem escolha → vira Espírito
+
+// ---------------- Baú do covil ----------------
+// Valor cresce com o tempo. Trolls ganham o ouro de quem abatem + metade do baú;
+// elfos corajosos podem saquear o baú dentro do covil.
+export const BOUNTY = { start: 60, mul: 1.6, every: 120, stealCd: 90, stealRadius: 1.9 };
+export const SUDDEN_DEATH_TEXT = 'Morte súbita: elfos sem Refúgio ficam visíveis para os trolls!';
 
 export const TROLL_RESPAWN = 12;
 export const TROLL_REGEN = 0.012; // fração da vida máx. por segundo fora de combate

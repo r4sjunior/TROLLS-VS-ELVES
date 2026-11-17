@@ -3,7 +3,8 @@
 import {
   TILE, WALKABLE, BUILDABLE, DT, MATCH_PRESETS, BUILDINGS, BUILD_RANGE, REPAIR_RATE, REPAIR_WOOD_PER_HP,
   DEMOLISH_REFUND, ELF, ELF_ABILITIES, ELF_UPGRADES, TROLL_CLASSES, TROLL_UPGRADES, ANCESTRAL, ANCESTRAL_LEVEL,
-  TROLL_RESPAWN, TROLL_REGEN, HARVEST_RATE, xpForLevel, EVENTS,
+  TROLL_RESPAWN, TROLL_REGEN, HARVEST_RATE, xpForLevel, EVENTS, RESOURCE_AMOUNT,
+  SPIRIT, WOLF, AFTERLIFE_DELAY, AFTERLIFE_TIMEOUT, BOUNTY, SUDDEN_DEATH_TEXT, PROTOCOL,
 } from './defs.js';
 import { generateMap } from './mapgen.js';
 import { makeRng } from './rng.js';
@@ -44,6 +45,8 @@ export function canAfford(res, cost) {
   return true;
 }
 
+export function trollClass(cls) { return cls === 'lobo' ? WOLF : (own(TROLL_CLASSES, cls) ? TROLL_CLASSES[cls] : TROLL_CLASSES.cacador); }
+
 export class Game {
   constructor({ seed = 1, mapPreset = 'floresta', matchPreset = 'padrao', players = [] } = {}) {
     this.seed = seed;
@@ -70,6 +73,9 @@ export class Game {
     this.phase = 1;
     this.over = null;
     this.teamUnlocked = false;
+    this.bounty = BOUNTY.start; this.nextBountyAt = this.prep + BOUNTY.every;
+    this.chest = { x: this.map.spawn.x, y: this.map.spawn.y };
+    this.hadElves = false;
     for (const p of players) this.addPlayer(p);
   }
 
@@ -86,6 +92,7 @@ export class Game {
       brain: null, unitId: 0,
     };
     this.players.set(id, p);
+    if (team === 'E') this.hadElves = true;
     const u = this.spawnUnit(p);
     p.unitId = u.id;
     if (isBot) p.brain = createBrain(this, p);
@@ -139,7 +146,10 @@ export class Game {
   recalc(p, u, fill = false) {
     const ratio = u.maxHp > 0 ? u.hp / u.maxHp : 1;
     const up = p.upgrades, L = p.level;
-    if (p.team === 'E') {
+    if (p.cls === 'espirito') {
+      u.r = SPIRIT.radius; u.maxHp = SPIRIT.hp; u.speed = SPIRIT.speed; u.dmg = 0;
+      u.atkRange = 0; u.atkRate = 1; u.ranged = false; u.vision = SPIRIT.vision; u.armor = 0; u.harvestMul = 0;
+    } else if (p.team === 'E') {
       u.r = ELF.radius;
       u.maxHp = ELF.hp + (up.vigor || 0) * 50 + (L - 1) * 8;
       u.speed = ELF.speed * (1 + 0.08 * (up.passos || 0));
@@ -148,14 +158,14 @@ export class Game {
       u.vision = ELF.vision; u.armor = 0;
       u.harvestMul = (1 + 0.3 * (up.coleta || 0)) * (1 + 0.03 * (L - 1));
     } else {
-      const c = TROLL_CLASSES[p.cls];
+      const c = trollClass(p.cls);
       const anc = p.ancestral;
       u.r = c.radius * (anc ? ANCESTRAL.radiusMul : 1);
       u.maxHp = c.hp * (1 + 0.08 * (L - 1)) * (1 + 0.18 * (up.pele || 0)) * (anc ? ANCESTRAL.hpMul : 1);
       u.dmg = c.atk.dmg * (1 + 0.07 * (L - 1)) * (1 + 0.15 * (up.forca || 0)) * (anc ? ANCESTRAL.dmgMul : 1);
       u.speed = c.speed * (1 + 0.06 * (up.impeto || 0)) * (anc ? ANCESTRAL.speedMul : 1);
       u.armor = c.armor + (up.pele || 0) + (anc ? ANCESTRAL.armor : 0);
-      u.atkRange = c.atk.range; u.atkRate = c.atk.rate; u.ranged = !!c.atk.ranged;
+      u.atkRange = c.atk.range; u.atkRate = c.atk.rate / (1 + 0.12 * (up.luvas || 0)); u.ranged = !!c.atk.ranged;
       u.bldMul = c.bldMul * (1 + 0.3 * (up.garras || 0));
       u.vision = c.vision;
     }
@@ -170,14 +180,15 @@ export class Game {
   log(entry) { this.fxLog.push({ tick: this.tick, ...entry }); }
   setTile(i, t) {
     this.tiles[i] = t;
-    this.res[i] = t === TILE.FOREST ? 30 : 0;
+    this.res[i] = t === TILE.FOREST ? RESOURCE_AMOUNT[TILE.FOREST] : 0;
     this.tileLog.push([this.tick, i, t]);
   }
   phaseMul() { return this.phase >= 4 ? 1.3 : this.phase === 3 ? 1.15 : 1; }
   abilitiesOf(p) {
+    if (p.cls === 'espirito') return SPIRIT.abilities.map((a) => ({ ...a, locked: false }));
     if (p.team === 'E') return ELF_ABILITIES.map((a) => ({ ...a, locked: p.level < a.level }));
-    const list = TROLL_CLASSES[p.cls].abilities.map((a) => ({ ...a, locked: false }));
-    list.push({ ...ANCESTRAL.ability, locked: !p.ancestral });
+    const list = trollClass(p.cls).abilities.map((a) => ({ ...a, locked: false }));
+    if (p.cls !== 'lobo') list.push({ ...ANCESTRAL.ability, locked: !p.ancestral });
     return list;
   }
 
@@ -192,6 +203,7 @@ export class Game {
       const b = this.buildings.get(bid); const def = BUILDINGS[b.type];
       if (def.walkable) return false;
       if (def.gate && u.team === 'E') return false;
+      if (u.cls === 'espirito') return false; // espíritos atravessam construções
       return true;
     }
     return false;
@@ -244,6 +256,7 @@ export class Game {
         case 'ability': return this.cmdAbility(p, u, cmd);
         case 'evolve': return this.cmdEvolve(p, u);
         case 'ping': return this.cmdPing(p, cmd);
+        case 'afterlife': return this.cmdAfterlife(p, u, cmd);
         default: return { ok: false, err: 'desconhecido' };
       }
     } catch (e) {
@@ -259,7 +272,7 @@ export class Game {
   }
 
   cmdBuild(p, u, c) {
-    if (p.team !== 'E' || u.dead) return { ok: false, err: 'Só elfos vivos constroem' };
+    if (p.team !== 'E' || u.dead || p.cls !== 'elfo') return { ok: false, err: 'Só elfos vivos constroem' };
     if (!own(BUILDINGS, c.type)) return { ok: false, err: 'Estrutura inválida' };
     const def = BUILDINGS[c.type];
     if (def.upgradeOnly) return { ok: false, err: 'Estrutura inválida' };
@@ -357,7 +370,7 @@ export class Game {
   }
 
   cmdEvolve(p, u) {
-    if (p.team !== 'T' || p.ancestral) return { ok: false, err: 'Indisponível' };
+    if (p.team !== 'T' || p.ancestral || p.cls === 'lobo') return { ok: false, err: 'Indisponível' };
     if (p.level < ANCESTRAL_LEVEL) return { ok: false, err: `Exige nível ${ANCESTRAL_LEVEL}` };
     p.ancestral = true;
     this.recalc(p, u, true);
@@ -365,6 +378,35 @@ export class Game {
     this.log({ k: 'evolve', x: u.x, y: u.y, pid: p.id });
     this.log({ k: 'msg', team: '*', text: `${p.name} evoluiu para Troll Ancestral!` });
     return { ok: true };
+  }
+
+  // ---------------------------------------------------------------- pós-morte
+  canChooseAfterlife(p, u) {
+    return p.team === 'E' && p.cls === 'elfo' && u.dead && !u.reviveAt && this.time >= u.deadAt + AFTERLIFE_DELAY;
+  }
+  cmdAfterlife(p, u, c) {
+    if (!this.canChooseAfterlife(p, u)) return { ok: false, err: 'Indisponível' };
+    if (c.choice === 'lobo') this.becomeWolf(p, u); else this.becomeSpirit(p, u);
+    return { ok: true };
+  }
+  becomeSpirit(p, u) {
+    p.cls = 'espirito'; u.cls = 'espirito';
+    u.dead = false; u.cds = [0, 0, 0]; u.buffs = {}; u.stealthUntil = 0; u.revealedUntil = 0;
+    this.recalc(p, u, true);
+    if (p.brain || p.isBot || p.takeover) p.brain = createBrain(this, p);
+    this.log({ k: 'revive', x: u.x, y: u.y, pid: p.id });
+    this.log({ k: 'msg', team: '*', text: `${p.name} voltou como Espírito Guardião dos elfos.` });
+  }
+  becomeWolf(p, u) {
+    p.team = 'T'; u.team = 'T'; p.cls = 'lobo'; u.cls = 'lobo';
+    p.res = { gold: Math.round(this.bounty * 0.5) }; p.acc = { wood: 0, gold: 0, crystal: 0 };
+    p.upgrades = {}; p.level = 1; p.xp = 0; p.ancestral = false;
+    u.cds = [0, 0, 0]; u.buffs = {}; u.reviveAt = 0; u.exposed = false;
+    u.dead = true; u.respawnAt = this.time + 3; // surge no covil
+    this.recalc(p, u, true);
+    p.forceFull = true; // a visão do time mudou: manda o estado completo
+    if (p.brain || p.isBot || p.takeover) p.brain = createBrain(this, p);
+    this.log({ k: 'msg', team: '*', text: `${p.name} se rendeu à caçada e virou um Lobo Sombrio!` });
   }
 
   cmdPing(p, c) {
@@ -428,6 +470,33 @@ export class Game {
         for (const b of [...this.buildings.values()]) if (rectDist(bx, by, b.x, b.y, b.w, b.h) < 2.5) this.damageBuilding(b, 75 * this.phaseMul(), u);
         break;
       }
+      case 'bencao': case 'egide': {
+        let best = null, bd = Infinity;
+        for (const b of this.buildings.values()) {
+          if (b.progress < 1) continue;
+          const d = rectDist(u.x, u.y, b.x, b.y, b.w, b.h);
+          if (d > 5.5) continue;
+          const score = d - (ab.id === 'bencao' ? (1 - b.hp / b.maxHp) * 4 : 0);
+          if (score < bd) { bd = score; best = b; }
+        }
+        if (!best) { u.cds[i] = 0; return { ok: false, err: 'Nenhuma construção por perto' }; }
+        if (ab.id === 'bencao') best.hp = Math.min(best.maxHp, best.hp + best.maxHp * 0.35);
+        else best.shieldUntil = t + ab.dur;
+        best.rev = this.tick;
+        this.log({ k: ab.id === 'bencao' ? 'heal' : 'shield', x: best.x + best.w / 2, y: best.y + best.h / 2, team: 'E' });
+        break;
+      }
+      case 'geada':
+        for (const e of this.units.values()) if (e.team === 'T' && !e.dead && Math.hypot(e.x - u.x, e.y - u.y) < 4) {
+          e.slowUntil = Math.max(e.slowUntil, t + ab.dur); e.revealedUntil = Math.max(e.revealedUntil, t + ab.dur);
+        }
+        this.log({ k: 'frost', x: u.x, y: u.y, team: 'E' });
+        break;
+      case 'uivo':
+        for (const e of this.units.values()) if (e.team === 'E' && !e.dead && e.cls !== 'espirito' && Math.hypot(e.x - u.x, e.y - u.y) < 26) e.revealedUntil = Math.max(e.revealedUntil, t + ab.dur);
+        this.log({ k: 'faro', x: u.x, y: u.y, team: 'T' });
+        break;
+      case 'investida': this.moveUnit(u, dx * 4.5, dy * 4.5); this.log({ k: 'dash', x: u.x, y: u.y, team: u.team }); break;
       case 'rugido':
         for (const e of this.units.values()) {
           if (e.team !== 'E' || e.dead) continue;
@@ -443,7 +512,7 @@ export class Game {
 
   // ---------------------------------------------------------------- combate
   damageUnit(target, amount, src) {
-    if (target.dead) return;
+    if (target.dead || target.cls === 'espirito') return;
     let dmg = amount * (1 - Math.min(0.5, target.armor * 0.04));
     if (target.team === 'E' && src && src.team === 'T') dmg *= ELF.dmgTaken;
     target.hp -= dmg;
@@ -463,7 +532,11 @@ export class Game {
     const kp = src && this.players.get(src.pid);
     if (u.team === 'E') {
       p.stats.survived = this.time;
-      if (kp) { kp.stats.kills++; this.addXp(kp, 110); kp.res.gold += 60; }
+      if (kp) {
+        const loot = Math.floor(p.res.gold || 0) + Math.round(this.bounty * 0.5);
+        kp.stats.kills++; this.addXp(kp, 110); kp.res.gold += loot; p.res.gold = 0;
+        this.log({ k: 'msg', team: 'T', pid: kp.id, text: `+${loot} de ouro pelo abate` });
+      }
       this.log({ k: 'death', x: u.x, y: u.y, pid: p.id });
       this.log({ k: 'msg', team: '*', text: `${p.name} foi abatido!` });
     } else {
@@ -476,6 +549,7 @@ export class Game {
 
   damageBuilding(b, amount, src) {
     if (!this.buildings.has(b.id)) return;
+    if (b.shieldUntil > this.time) { if (this.tick % 6 === 0) this.log({ k: 'block', x: b.x + b.w / 2, y: b.y + b.h / 2 }); return; }
     const def = BUILDINGS[b.type];
     let dmg = amount * (1 - Math.min(0.5, def.armor * 0.06));
     if (src && src.team === 'T') dmg *= src.bldMul || 1;
@@ -485,7 +559,7 @@ export class Game {
     if (sp && sp.team === 'T') {
       sp.stats.dmgBuildings += dmg;
       this.addXp(sp, dmg / 12);
-      sp.res.gold += dmg / 10;
+      sp.res.gold += dmg / 5;
     }
     if (b.hp <= 0) {
       if (sp) sp.stats.destroyed++;
@@ -508,7 +582,7 @@ export class Game {
     const vis = this.vis[u.team];
     let best = null, bd = Infinity;
     for (const e of this.units.values()) {
-      if (e.team !== enemyTeam || e.dead || !vis.has(e.id)) continue;
+      if (e.team !== enemyTeam || e.dead || !vis.has(e.id) || e.cls === 'espirito') continue;
       const d = Math.hypot(e.x - u.x, e.y - u.y) - e.r - u.r;
       if (d <= range && d < bd) { bd = d; best = e; }
     }
@@ -547,7 +621,7 @@ export class Game {
   }
 
   tryAttack(u) {
-    if (u.atkTimer > 0 || u.dead || this.time < u.stunnedUntil) return;
+    if (u.atkTimer > 0 || u.dead || this.time < u.stunnedUntil || u.cls === 'espirito') return;
     if (u.team === 'T' && this.phase === 1) return;
     const rateMul = u.buffs.atk && u.buffs.atk.until > this.time ? u.buffs.atk.mul : 1;
     const target = this.findUnitTarget(u, u.atkRange);
@@ -579,6 +653,19 @@ export class Game {
   tryInteract(u, dt) {
     const p = this.players.get(u.pid);
     if (u.team !== 'E' || u.dead || this.time < u.stunnedUntil) return;
+    if (p.cls === 'espirito') return this.spiritRepair(u, p, dt);
+    // 0) Saque do baú do covil
+    if (Math.hypot(u.x - this.chest.x, u.y - this.chest.y) < BOUNTY.stealRadius) {
+      const ready = (p.lastCmdAt.steal || -999) + BOUNTY.stealCd <= this.time;
+      if (ready) {
+        const v = this.bounty;
+        p.lastCmdAt.steal = this.time; p.res.gold += v; this.addXp(p, 30);
+        u.revealedUntil = Math.max(u.revealedUntil, this.time + 5); // alarme
+        this.log({ k: 'loot', x: this.chest.x, y: this.chest.y, v, pid: p.id });
+        this.log({ k: 'msg', team: '*', text: `${p.name} saqueou ${v} de ouro do baú do covil!` });
+      }
+      return;
+    }
     // 1) Reparo
     let rep = null, rd = 2.3;
     for (const b of this.buildings.values()) {
@@ -642,6 +729,19 @@ export class Game {
     }
   }
 
+  spiritRepair(u, p, dt) {
+    let best = null, bd = 2.6;
+    for (const b of this.buildings.values()) {
+      if (b.hp >= b.maxHp || b.progress < 1) continue;
+      const d = rectDist(u.x, u.y, b.x, b.y, b.w, b.h) - u.r; if (d < bd) { bd = d; best = b; }
+    }
+    if (!best) return;
+    const amt = Math.min(SPIRIT.repairRate * dt, best.maxHp - best.hp);
+    best.hp += amt; best.rev = this.tick; this.addXp(p, amt / 50);
+    u.state = 'build'; u.stateUntil = this.time + 0.2;
+    u.face = Math.atan2(best.y + best.h / 2 - u.y, best.x + best.w / 2 - u.x);
+  }
+
   // ---------------------------------------------------------------- visão
   computeVision() {
     const fog = this.event && this.event.k === 'nevoa' ? 0.6 : 1;
@@ -663,6 +763,7 @@ export class Game {
       const set = this.vis[team]; set.clear();
       for (const e of this.units.values()) {
         if (e.team === team || e.dead) continue;
+        if (team === 'T' && e.cls === 'espirito') continue;
         if (team === 'T' && e.revealedUntil > this.time) { set.add(e.id); continue; }
         const stealth = e.stealthUntil > this.time;
         let seen = false;
@@ -702,7 +803,7 @@ export class Game {
       this.log({ k: 'phase', v: ph, team: '*', text: names[ph] });
       if (ph === 2) for (const u of this.units.values()) if (u.team === 'T') this.unstick(u);
       if (ph === 3) this.nextEventAt = this.time + 20;
-      if (ph === 4) this.nextHowlAt = this.time + 15;
+      if (ph === 4) { this.nextHowlAt = this.time; this.log({ k: 'msg', team: '*', text: SUDDEN_DEATH_TEXT }); }
     }
   }
 
@@ -737,9 +838,20 @@ export class Game {
       for (const u of this.units.values()) if (!u.dead && Math.hypot(u.x - x, u.y - y) < 2) this.damageUnit(u, 45, null);
     }
     if (this.phase === 4 && t >= this.nextHowlAt) {
-      this.nextHowlAt = t + 40;
-      for (const u of this.units.values()) if (u.team === 'E' && !u.dead) u.revealedUntil = Math.max(u.revealedUntil, t + 4);
-      this.log({ k: 'msg', team: '*', text: 'Uivo da Lua: os trolls sentem todos os elfos!' });
+      this.nextHowlAt = t + 1;
+      const homes = new Set();
+      for (const b of this.buildings.values()) if (b.type === 'refugio' && b.progress >= 1) homes.add(b.owner);
+      for (const u of this.units.values()) {
+        if (u.team !== 'E' || u.dead || u.cls !== 'elfo') continue;
+        u.exposed = !homes.has(u.pid);
+        if (u.exposed) u.revealedUntil = Math.max(u.revealedUntil, t + 1.3);
+      }
+    }
+    // Baú do covil vale mais com o tempo
+    if (t >= this.nextBountyAt) {
+      this.nextBountyAt = t + BOUNTY.every;
+      this.bounty = Math.round(this.bounty * BOUNTY.mul);
+      this.log({ k: 'msg', team: '*', text: `O baú do covil agora vale ${this.bounty} de ouro.` });
     }
     this.pings = this.pings.filter((pg) => pg.until > t);
   }
@@ -762,6 +874,9 @@ export class Game {
         if (u.team === 'T' && t >= u.respawnAt) {
           u.dead = false; u.x = this.map.spawn.x; u.y = this.map.spawn.y;
           this.recalc(p, u, true); this.unstick(u);
+        } else if (this.canChooseAfterlife(p, u) && (((p.isBot || p.takeover) && t >= u.deadAt + AFTERLIFE_DELAY + 2) || t >= u.deadAt + AFTERLIFE_DELAY + AFTERLIFE_TIMEOUT)) {
+          // bots escolhem sozinhos; humano que não escolher vira espírito
+          if ((p.isBot || p.takeover) && this.rng.next() < 0.35) this.becomeWolf(p, u); else this.becomeSpirit(p, u);
         } else if (u.team === 'E' && u.reviveAt && t >= u.reviveAt) {
           const altar = this.buildings.get(u.reviveAltar);
           u.reviveAt = 0;
@@ -794,7 +909,7 @@ export class Game {
       else if (u.input.int) this.tryInteract(u, dt);
       // Regeneração
       if (u.buffs.heal) u.hp = Math.min(u.maxHp, u.hp + u.buffs.heal.rate * dt);
-      if (u.team === 'T' && t - u.lastHitAt > 4) u.hp = Math.min(u.maxHp, u.hp + u.maxHp * TROLL_REGEN * dt);
+      if (u.team === 'T' && t - u.lastHitAt > 4) u.hp = Math.min(u.maxHp, u.hp + u.maxHp * (TROLL_REGEN + 0.006 * (p.upgrades.emblema || 0)) * dt);
       if (u.team === 'E' && t - u.lastHitAt > 5) u.hp = Math.min(u.maxHp, u.hp + ELF.regen * dt);
       if (u.team === 'T' && this.phase >= 2) { p.res.gold += 0.75 * dt; this.addXp(p, 1.5 * dt); }
       if (u.team === 'E') p.stats.survived = t;
@@ -825,6 +940,7 @@ export class Game {
     for (const b of [...this.buildings.values()]) {
       const def = BUILDINGS[b.type];
       const owner = this.players.get(b.owner);
+      if (b.shieldUntil && t >= b.shieldUntil) { b.shieldUntil = 0; b.rev = this.tick; }
       if (b.progress < 1) {
         b.progress = Math.min(1, b.progress + dt / def.time);
         b.hp = Math.min(b.maxHp, b.hp + b.maxHp * 0.9 * dt / def.time);
@@ -837,7 +953,9 @@ export class Game {
         }
         continue;
       }
-      if (def.income && owner) for (const k in def.income) {
+      if (def.gather && owner && owner.team === 'E') this.runGather(b, def, owner, dt);
+      if (def.autoRepair && owner && owner.team === 'E') this.runAutoRepair(b, def, owner, dt);
+      if (def.income && owner && owner.team === 'E') for (const k in def.income) {
         owner.acc[k] = (owner.acc[k] || 0) + def.income[k] * dt;
         while (owner.acc[k] >= 1) { owner.acc[k] -= 1; owner.res[k] = (owner.res[k] || 0) + 1; }
       }
@@ -882,7 +1000,7 @@ export class Game {
       }
       if (def.revive && t >= b.reviveCdUntil) {
         for (const u of this.units.values()) {
-          if (u.team === 'E' && u.dead && !u.reviveAt) {
+          if (u.team === 'E' && u.dead && !u.reviveAt && u.cls === 'elfo') {
             u.reviveAt = t + def.revive.delay; u.reviveAltar = b.id; b.reviveCdUntil = t + def.revive.cooldown;
             this.log({ k: 'msg', team: 'E', text: `${this.players.get(u.pid).name} vai renascer em ${def.revive.delay}s.` });
             break;
@@ -890,6 +1008,42 @@ export class Game {
         }
       }
     }
+  }
+
+  // Ninho de Fadas: fadas tiram madeira das árvores em volta, sozinhas
+  runGather(b, def, owner, dt) {
+    b.acc = (b.acc || 0) + def.gather.rate * dt;
+    if (b.acc < 1) return;
+    b.acc -= 1;
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2, R = Math.ceil(def.gather.radius);
+    let best = -1, bd = Infinity;
+    for (let oy = -R; oy <= R; oy++) for (let ox = -R; ox <= R; ox++) {
+      const tx = Math.floor(cx) + ox, ty = Math.floor(cy) + oy;
+      if (tx < 1 || ty < 1 || tx >= this.W - 1 || ty >= this.H - 1) continue;
+      const i = ty * this.W + tx; if (this.tiles[i] !== TILE.FOREST) continue;
+      const d = Math.hypot(tx + 0.5 - cx, ty + 0.5 - cy); if (d <= def.gather.radius && d < bd) { bd = d; best = i; }
+    }
+    if (best < 0) { b.idle = true; return; }
+    b.idle = false;
+    owner.res.wood += 1; owner.stats.wood += 1;
+    this.res[best] -= 1;
+    if (this.res[best] <= 0) { this.setTile(best, TILE.GRASS); this.log({ k: 'deplete', x: (best % this.W) + 0.5, y: ((best / this.W) | 0) + 0.5 }); }
+  }
+  // Oficina: conserta sozinha a construção mais avariada em volta, gastando madeira do dono
+  runAutoRepair(b, def, owner, dt) {
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    let best = null, br = 1;
+    for (const o of this.buildings.values()) {
+      if (o.progress < 1 || o.hp >= o.maxHp) continue;
+      if (rectDist(cx, cy, o.x, o.y, o.w, o.h) > def.autoRepair.radius) continue;
+      const r = o.hp / o.maxHp; if (r < br) { br = r; best = o; }
+    }
+    if (!best || (owner.res.wood || 0) < 1) return;
+    const amt = Math.min(def.autoRepair.rate * dt, best.maxHp - best.hp);
+    owner.acc.wood -= amt * REPAIR_WOOD_PER_HP;
+    if (owner.acc.wood < 0) { owner.res.wood -= 1; owner.acc.wood += 1; }
+    best.hp += amt; best.rev = this.tick;
+    if (this.tick % 10 === 0) this.log({ k: 'repair', x: best.x + best.w / 2, y: best.y + best.h / 2, team: 'E' });
   }
 
   updateProjectiles(dt) {
@@ -916,15 +1070,14 @@ export class Game {
   }
 
   checkEnd() {
-    let elves = 0, aliveElves = 0, pending = 0;
+    let aliveElves = 0, pending = 0;
     for (const u of this.units.values()) {
-      if (u.team !== 'E') continue;
-      elves++;
+      if (u.team !== 'E' || u.cls !== 'elfo') continue;
       if (!u.dead) aliveElves++;
       else if (u.reviveAt) pending++;
     }
     let winner = null;
-    if (elves > 0 && aliveElves === 0 && pending === 0) winner = 'T';
+    if (this.hadElves && aliveElves === 0 && pending === 0) winner = 'T';
     else if (this.time >= this.duration) winner = 'E';
     if (!winner) return;
     const players = [...this.players.values()].map((p) => ({
@@ -938,6 +1091,7 @@ export class Game {
   // ---------------------------------------------------------------- snapshot por time (anti-trapaça: só o que o time vê)
   snapshot(pid, since = 0) {
     const p = this.players.get(pid);
+    if (p && p.forceFull) { since = 0; p.forceFull = false; }
     const team = p ? p.team : 'E';
     const vis = this.vis[team];
     const units = [];
@@ -963,7 +1117,7 @@ export class Game {
         const def = BUILDINGS[b.type];
         if (!b.discovered || (def.hidden && !b.revealed)) continue;
       }
-      bld.push([b.id, b.type, b.owner, b.x, b.y, b.rot, Math.ceil(b.hp), b.maxHp, r2(b.progress), (b.trapReady ? 1 : 0) | (b.revealed ? 2 : 0)]);
+      bld.push([b.id, b.type, b.owner, b.x, b.y, b.rot, Math.ceil(b.hp), b.maxHp, r2(b.progress), (b.trapReady ? 1 : 0) | (b.revealed ? 2 : 0) | (b.shieldUntil > this.time ? 4 : 0)]);
     }
     const rm = this.removedLog.filter((r) => r[0] > since).map((r) => r[1]);
     const tiles = this.tileLog.filter((r) => r[0] > since).map((r) => [r[1], r[2]]);
@@ -981,19 +1135,22 @@ export class Game {
         cds: u.cds.map((c) => r2(Math.max(0, c - this.time))), abilities: this.abilitiesOf(p).map((a) => [a.id, a.name, a.locked ? 1 : 0, a.cd]),
         dead: u.dead, respawnIn: u.dead && u.team === 'T' ? r2(u.respawnAt - this.time) : 0, reviveIn: u.reviveAt ? r2(u.reviveAt - this.time) : 0,
         unlocked: this.teamUnlocked, takeover: p.takeover, stats: p.stats,
+        choose: this.canChooseAfterlife(p, u) ? Math.max(1, Math.ceil(u.deadAt + AFTERLIFE_DELAY + AFTERLIFE_TIMEOUT - this.time)) : 0,
+        exposed: !!u.exposed && this.phase === 4 && !u.dead,
+        stealIn: Math.max(0, Math.ceil((p.lastCmdAt.steal || -999) + BOUNTY.stealCd - this.time)),
       };
     }
     const players = [...this.players.values()].map((q) => [q.id, q.name, q.team, q.cls, this.unitOf(q).dead ? 0 : 1, q.level, q.isBot ? 1 : 0, q.connected ? 1 : 0]);
     return {
       t: 'snap', tick: this.tick, time: r2(this.time), phase: this.phase, prep: this.prep, duration: this.duration,
       event: this.event ? { k: this.event.k, left: r2(this.event.until - this.time) } : null,
-      units, bld, rm, tiles, proj, fx, me, players,
+      units, bld, rm, tiles, proj, fx, me, players, bounty: this.bounty, chest: [r2(this.chest.x), r2(this.chest.y)],
       pings: this.pings.filter((pg) => pg.team === team).map((pg) => [r2(pg.x), r2(pg.y), pg.pid]),
       full: since === 0, over: this.over,
     };
   }
 
   initInfo(pid) {
-    return { t: 'init', seed: this.seed, mapPreset: this.mapPreset, matchPreset: this.matchPreset, pid, tick: this.tick };
+    return { t: 'init', seed: this.seed, mapPreset: this.mapPreset, matchPreset: this.matchPreset, pid, tick: this.tick, proto: PROTOCOL };
   }
 }

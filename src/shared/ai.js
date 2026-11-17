@@ -12,6 +12,7 @@ const DIFF = {
 const RES_TILE = { wood: TILE.FOREST, gold: TILE.GOLD, crystal: TILE.CRYSTAL };
 
 export function createBrain(game, player) {
+  if (player.cls === 'espirito') return new SpiritBrain(game, player);
   return player.team === 'E' ? new ElfBrain(game, player) : new TrollBrain(game, player);
 }
 
@@ -151,6 +152,8 @@ class ElfBrain extends Brain {
     plan.push({ type: 'espinhos', x: cx, y: cy + R + 1 });
     if (sk > 0.5) plan.push({ type: 'torre', x: cx + 2, y: cy + 2 });
     plan.push({ type: 'serraria', near: true });
+    plan.push({ type: 'ninho', near: true });
+    if (sk > 0.5) plan.push({ type: 'oficina', near: true });
     if (sk > 0.5) plan.push({ type: 'raizes', x: cx - 1, y: cy + R + 1 }, { type: 'espinhos', x: cx + 1, y: cy + R + 1 });
     plan.push({ type: 'extrator', near: true });
     if (sk > 0.5) plan.push({ type: 'torre', x: cx + 2, y: cy - 2 }, { type: 'torre', x: cx - 2, y: cy + 2 });
@@ -494,6 +497,10 @@ class TrollBrain extends Brain {
         if ((elf && ed < 9) || nearB()) { if (ready(0)) use(0); }
         if (u.hp < u.maxHp * 0.5 && ready(1)) use(1);
         break;
+      case 'lobo':
+        if (!elf && ready(0)) use(0);
+        if (elf && ed > 2.5 && ed < 6 && ready(1)) { u.input.mx = (elf.x - u.x) / ed; u.input.my = (elf.y - u.y) / ed; use(1); }
+        break;
       default: break;
     }
     if (p.ancestral && elf && ed < 6 && ready(2)) use(2);
@@ -501,12 +508,50 @@ class TrollBrain extends Brain {
 
   buyUpgrades() {
     const p = this.p, u = this.u, g = this.g;
-    const order = p.cls === 'destruidor' ? ['garras', 'pele', 'forca', 'impeto'] : p.cls === 'cacador' ? ['impeto', 'forca', 'garras', 'pele'] : ['forca', 'pele', 'garras', 'impeto'];
+    const order = p.cls === 'destruidor' ? ['garras', 'pele', 'forca', 'luvas', 'emblema', 'impeto'] : p.cls === 'cacador' ? ['impeto', 'forca', 'luvas', 'garras', 'pele', 'emblema'] : ['forca', 'pele', 'luvas', 'garras', 'emblema', 'impeto'];
     let best = null, bl = Infinity;
     for (const key of order) {
       const lvl = p.upgrades[key] || 0; if (lvl >= TROLL_UPGRADES[key].max) continue;
       if (lvl < bl) { bl = lvl; best = key; }
     }
     if (best) g.cmdBuy(p, u, { key: best });
+  }
+}
+
+// Espírito Guardião: vai até a construção aliada mais avariada, conserta e usa Bênção/Égide/Geada.
+class SpiritBrain extends Brain {
+  constructor(g, p) {
+    super(g, p);
+    // espíritos atravessam construções: só rocha e água bloqueiam
+    this.cost = (x, y) => (WALKABLE.has(g.tiles[y * g.W + x]) || g.tiles[y * g.W + x] === TILE.FOREST ? 1 : Infinity);
+  }
+  onBlocked() { this.path = null; }
+  decide() {
+    const g = this.g, u = this.u, p = this.p;
+    let worst = null, wr = 0.97;
+    for (const b of g.buildings.values()) {
+      if (b.progress < 1) continue;
+      const r = b.hp / b.maxHp - Math.min(0.2, g.rectDistTo(u, b) / 200);
+      if (r < wr) { wr = r; worst = b; }
+    }
+    // troll por perto: congela
+    for (const id of g.vis.E) {
+      const e = g.units.get(id);
+      if (e && e.team === 'T' && Math.hypot(e.x - u.x, e.y - u.y) < 3.8 && g.time >= u.cds[2]) g.cmdAbility(p, u, { i: 2 });
+    }
+    if (!worst) {
+      // sem nada a consertar: acompanha um elfo vivo
+      let ally = null, ad = Infinity;
+      for (const o of g.units.values()) if (o.team === 'E' && o.cls === 'elfo' && !o.dead) { const d = Math.hypot(o.x - u.x, o.y - u.y); if (d < ad) { ad = d; ally = o; } }
+      u.input.int = false;
+      if (ally && ad > 3) this.goTo(ally.x, ally.y, this.cost); else this.stop();
+      return;
+    }
+    const d = g.rectDistTo(u, worst);
+    if (d > 2) { u.input.int = false; this.goTo(worst.x + worst.w / 2, worst.y + worst.h / 2, this.cost); return; }
+    this.stop();
+    u.input.int = true;
+    if (worst.hp / worst.maxHp < 0.6 && g.time >= u.cds[0]) g.cmdAbility(p, u, { i: 0 });
+    if (worst.hp / worst.maxHp < 0.35 && g.time >= u.cds[1]) g.cmdAbility(p, u, { i: 1 });
   }
 }

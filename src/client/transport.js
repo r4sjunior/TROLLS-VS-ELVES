@@ -2,7 +2,7 @@
 //  - LocalTransport: roda a simulação no próprio aparelho, com bots (offline)
 //  - NetTransport: conversa com o servidor autoritativo via WebSocket
 import { Game } from '../shared/sim.js';
-import { DT } from '../shared/defs.js';
+import { DT, PROTOCOL } from '../shared/defs.js';
 
 export class LocalTransport {
   constructor({ seed, mapPreset, matchPreset, players, pid }) {
@@ -84,6 +84,13 @@ export class NetTransport {
         if (ws !== this.ws) return;
         this.lastMsgAt = Date.now();
         let m; try { m = JSON.parse(ev.data); } catch { return; }
+        if (m.t === 'welcome' && m.proto !== PROTOCOL) {
+          // cliente e servidor geram o mapa cada um do seu lado: versões diferentes = mundos diferentes
+          this.closedByUser = true; try { ws.close(); } catch { /* ok */ }
+          if (!settled) { settled = true; resolve(m); }
+          this.emit('outdated', { server: m.proto || 0 });
+          return;
+        }
         if (m.t === 'welcome') {
           const wasReconnect = this.everConnected;
           this.token = m.token; this.connected = true; this.everConnected = true; this.retries = 0;

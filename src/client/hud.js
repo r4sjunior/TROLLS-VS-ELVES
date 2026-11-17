@@ -1,7 +1,16 @@
 // HUD e controles (touch primeiro; teclado/mouse como apoio para testes no PC).
-import { BUILDINGS, BUILD_CATEGORIES, ELF_UPGRADES, TROLL_UPGRADES, TROLL_CLASSES, ANCESTRAL_LEVEL, TILE, EVENTS, BUILD_RANGE } from '../shared/defs.js';
+import { BUILDINGS, BUILD_CATEGORIES, ELF_UPGRADES, TROLL_UPGRADES, TROLL_CLASSES, ANCESTRAL_LEVEL, TILE, EVENTS, BUILD_RANGE, SPIRIT, WOLF, BOUNTY } from '../shared/defs.js';
 import { placementOk, buildingDims, canAfford } from '../shared/sim.js';
 import { sfx } from './audio.js';
+
+// Nome curto da "classe" atual do jogador (inclui as formas pós-morte)
+export function roleName(team, cls, ancestral) {
+  if (cls === 'espirito') return 'Espírito';
+  if (cls === 'lobo') return 'Lobo';
+  if (team === 'E') return 'Elfo';
+  if (ancestral) return 'Ancestral';
+  return (TROLL_CLASSES[cls] || TROLL_CLASSES.cacador).name;
+}
 
 const ICON = {
   atk: '<svg viewBox="0 0 24 24"><path d="M14.5 3 21 3 21 9.5 10 20.5 7.5 18 5 20.5 3.5 19 6 16.5 3.5 14 14.5 3Z" fill="currentColor"/></svg>',
@@ -51,7 +60,7 @@ export class Hud {
         <div class="team-dots" id="h-team"></div>
       </div>
     </div>
-    <div class="hud-top-center"><div class="phase" id="h-phase"></div><div class="timer" id="h-timer"></div><div class="event hidden" id="h-event"></div></div>
+    <div class="hud-top-center"><div class="phase" id="h-phase"></div><div class="timer" id="h-timer"></div><div class="event hidden" id="h-event"></div><div class="bounty" id="h-bounty"></div><div class="warn hidden" id="h-warn"></div></div>
     <div class="hud-top-right">
       <div class="mini-wrap"><canvas id="h-mini" width="140" height="140"></canvas></div>
       <div class="hud-row"><div class="res" id="h-res"></div><button class="small" id="h-prog" title="Progressão (Tab)">${ICON.bag}</button><button class="small" id="h-menu" title="Menu (Esc)">${ICON.menu}</button></div>
@@ -219,7 +228,7 @@ export class Hud {
 
   // ---------------------------------------------------------------- construção
   toggleBuild() {
-    if (!this.world || this.world.team() !== 'E' || this.world.me.dead) return;
+    if (!this.world || this.world.team() !== 'E' || this.world.me.dead || this.world.me.cls !== 'elfo') return;
     if (this.build) return this.exitBuild();
     this.closeCtx(); this.closeProg();
     this.build = { type: null, rot: 0, x: 0, y: 0, dragged: false };
@@ -340,8 +349,8 @@ export class Hud {
   renderProg() {
     const w = this.world; if (!w || !w.me) return;
     const me = w.me; const el = this.$('#h-prog-panel');
-    const table = me.team === 'E' ? ELF_UPGRADES : TROLL_UPGRADES;
-    const title = me.team === 'E' ? 'Progressão do Elfo' : `${me.ancestral ? 'Troll Ancestral' : TROLL_CLASSES[me.cls].name} — Evolução`;
+    const table = me.cls === 'espirito' ? {} : me.team === 'E' ? ELF_UPGRADES : TROLL_UPGRADES;
+    const title = me.cls === 'espirito' ? 'Espírito Guardião' : me.cls === 'lobo' ? 'Lobo Sombrio — Loja' : me.team === 'E' ? 'Progressão do Elfo' : `${me.ancestral ? 'Troll Ancestral' : TROLL_CLASSES[me.cls].name} — Loja e evolução`;
     let html = `<h3>${title}</h3><div class="sub">Nível ${me.level} · ${me.xp}/${me.xpNext} XP</div><div class="ups">`;
     for (const [key, up] of Object.entries(table)) {
       const lvl = me.upgrades[key] || 0; const max = lvl >= up.max; const cost = max ? null : up.cost(lvl);
@@ -355,7 +364,9 @@ export class Hud {
       html += `<div class="${locked ? 'locked' : ''}"><b>${name}</b> <small>(${cd}s)</small> — ${desc}${locked ? ' <i>(bloqueada)</i>' : ''}</div>`;
     }
     html += '</div>';
-    if (me.team === 'T' && !me.ancestral) html += `<div class="hint">Ao chegar no nível ${ANCESTRAL_LEVEL}, você pode evoluir para Troll Ancestral.</div>`;
+    if (me.team === 'T' && !me.ancestral && me.cls !== 'lobo') html += `<div class="hint">Ao chegar no nível ${ANCESTRAL_LEVEL}, você pode evoluir para Troll Ancestral.</div>`;
+    if (me.cls === 'espirito') html += '<div class="hint">Atravesse construções e segure Reparar ao lado delas para consertar de graça. Trolls não veem nem atacam você.</div>';
+    if (me.team === 'T') html += '<div class="hint">Cada nível da loja custa o dobro do anterior. Ataque construções e abata elfos para ganhar ouro.</div>';
     html += `<h4>Estatísticas</h4><div class="stats">Abates ${me.stats.kills} · Construções ${me.stats.built} · Destruídas ${me.stats.destroyed} · Madeira ${me.stats.wood} · Ouro ${me.stats.gold}</div>`;
     html += '<button class="close" id="p-x">×</button>';
     el.innerHTML = html; el.classList.remove('hidden');
@@ -366,8 +377,9 @@ export class Hud {
     this.progStamp = JSON.stringify(me.res) + me.level;
   }
   abilityDesc(me, id) {
-    if (me.team === 'E') return { salto: 'Avança rápido na direção do movimento.', camuflagem: 'Fica invisível para trolls por 6s (nível 3).' }[id] || '';
-    const all = [...Object.values(TROLL_CLASSES).flatMap((c) => c.abilities), { id: 'rugido', desc: 'Atordoa elfos próximos e revela todos (Ancestral).' }];
+    const extra = [...SPIRIT.abilities, ...WOLF.abilities];
+    if (me.team === 'E' && me.cls !== 'espirito') return { salto: 'Avança rápido na direção do movimento.', camuflagem: 'Fica invisível para trolls por 6s (nível 3).' }[id] || '';
+    const all = [...extra, ...Object.values(TROLL_CLASSES).flatMap((c) => c.abilities), { id: 'rugido', desc: 'Atordoa elfos próximos e revela todos (Ancestral).' }];
     return (all.find((a) => a.id === id) || {}).desc || '';
   }
 
@@ -484,7 +496,7 @@ export class Hud {
     }
     this.$('#h-xp').style.width = `${(me.xp / me.xpNext) * 100}%`;
     this.$('#h-lvl').textContent = `Nv ${me.level}`;
-    const portrait = isElf ? 'Elfo' : me.ancestral ? 'Ancestral' : TROLL_CLASSES[me.cls].name;
+    const portrait = roleName(me.team, me.cls, me.ancestral);
     if (this.$('#h-portrait').textContent !== portrait) { this.$('#h-portrait').textContent = portrait; this.$('#h-portrait').className = `portrait ${me.team}`; }
     // Time
     const dots = [...w.players.values()].filter((p) => p.team === me.team).map((p) => `<i class="${p.alive ? 'on' : ''} ${p.id === me.pid ? 'me' : ''}" title="${p.name}"></i>`).join('');
@@ -500,9 +512,18 @@ export class Hud {
     const rh = res.map((k) => `<span>${ICON[k]}${me.res[k]}</span>`).join('');
     if (rh !== this.lastRes) { this.$('#h-res').innerHTML = rh; this.lastRes = rh; }
     // Botões
+    const spirit = me.cls === 'espirito';
+    const nearChest = u && w.chest && Math.hypot(u.x - w.chest[0], u.y - w.chest[1]) < BOUNTY.stealRadius + 0.6;
     this.$('#b-int').classList.toggle('hidden', !isElf);
-    this.$('#b-bld').classList.toggle('hidden', !isElf);
-    this.$('#b-int').querySelector('b').textContent = 'Coletar';
+    this.$('#b-bld').classList.toggle('hidden', !isElf || spirit);
+    this.$('#b-atk').classList.toggle('hidden', spirit);
+    const intLabel = spirit ? 'Reparar' : nearChest ? (me.stealIn ? `Baú ${me.stealIn}s` : 'Saquear') : 'Coletar';
+    if (this.$('#b-int').querySelector('b').textContent !== intLabel) this.$('#b-int').querySelector('b').textContent = intLabel;
+    const bt = `Baú do covil: ${w.bounty || 0} de ouro`;
+    if (this.$('#h-bounty').textContent !== bt) this.$('#h-bounty').textContent = bt;
+    const warn = this.$('#h-warn');
+    warn.classList.toggle('hidden', !me.exposed);
+    if (me.exposed) warn.textContent = 'Sem Refúgio: os trolls estão vendo você!';
     this.$('#b-atk').classList.toggle('on', this.toggles.atk);
     this.$('#b-int').classList.toggle('on', this.toggles.int);
     me.abilities.forEach(([id, name, locked], i) => {
@@ -522,11 +543,27 @@ export class Hud {
     const dead = this.$('#h-dead');
     if (me.dead) {
       dead.classList.remove('hidden');
-      dead.innerHTML = me.team === 'T' ? `<b>Você caiu</b><span>Renasce no covil em ${Math.ceil(me.respawnIn)}s</span>`
-        : me.reviveIn ? `<b>Você foi abatido</b><span>Renascendo no Altar em ${Math.ceil(me.reviveIn)}s</span>`
-          : '<b>Você foi abatido</b><span>Assistindo aliados · toque na tela para trocar · um Altar de Renascimento pode trazer você de volta</span>';
+      if (me.choose) {
+        if (this.deadMode !== 'choose') {
+          this.deadMode = 'choose';
+          dead.className = 'dead choose';
+          dead.innerHTML = `<b>Você foi abatido</b><span>Escolha como continuar na partida (<i id="h-ch-t"></i>s)</span>
+            <div class="choice"><button class="opt spirit" data-c="espirito"><b>Espírito Guardião</b><small>Fica com os elfos: atravessa muros, conserta e protege construções. Trolls não veem você.</small></button>
+            <button class="opt wolf" data-c="lobo"><b>Lobo Sombrio</b><small>Passa para os trolls e caça seus antigos aliados. Começa com ouro do baú.</small></button></div>`;
+          dead.querySelectorAll('button[data-c]').forEach((b) => b.addEventListener('pointerdown', (e) => {
+            e.stopPropagation(); sfx('click'); this.send({ t: 'afterlife', choice: b.dataset.c });
+          }));
+        }
+        const tt = dead.querySelector('#h-ch-t'); if (tt) tt.textContent = me.choose;
+      } else {
+        this.deadMode = 'info';
+        dead.className = 'dead';
+        dead.innerHTML = me.team === 'T' ? `<b>Você caiu</b><span>${me.cls === 'lobo' && !me.respawnIn ? 'Surgindo no covil…' : `Renasce no covil em ${Math.ceil(me.respawnIn)}s`}</span>`
+          : me.reviveIn ? `<b>Você foi abatido</b><span>Renascendo no Altar em ${Math.ceil(me.reviveIn)}s</span>`
+            : '<b>Você foi abatido</b><span>Aguarde para escolher: Espírito Guardião ou Lobo Sombrio</span>';
+      }
       if (this.build) this.exitBuild();
-    } else dead.classList.add('hidden');
+    } else { dead.classList.add('hidden'); this.deadMode = null; }
     // Construção
     if (this.build) {
       const b = this.build;

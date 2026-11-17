@@ -104,6 +104,22 @@ conectados. Arena sem humanos é fechada para não gastar CPU.
   fraco do anel (ponto vulnerável), recuam para regenerar e usam habilidades conforme a classe.
   Dificuldade altera tempo de reação, frequência de habilidades, qualidade do plano e uso de melhorias.
 
+### Mecânicas da versão 5 (protocolo 5)
+
+* **Pós-morte:** o elfo abatido (sem renascimento agendado no Altar) escolhe em até 25 s:
+  *Espírito Guardião* (fica com os elfos, atravessa construções, conserta de graça, Bênção/Égide/Geada;
+  invisível e imune para trolls) ou *Lobo Sombrio* (troca para o time dos trolls, com estado completo enviado
+  via `forceFull`). Bots escolhem sozinhos. A vitória troll considera só elfos de verdade (`cls === 'elfo'`).
+* **Baú do covil:** começa em 60 de ouro e vale ×1,6 a cada 2 min. Quem abate um elfo leva o ouro dele e
+  metade do baú. Elfos podem saquear o baú dentro do covil (recarga de 90 s, e quem saqueia fica revelado).
+* **Loja do troll:** 6 itens com custo dobrando por nível (dano, vida/armadura, regeneração, velocidade de
+  ataque, velocidade, dano em construções). Troll ganha ouro = dano em construções ÷ 5.
+* **Ajudantes:** *Ninho de Fadas* coleta madeira das árvores num raio de 4,5; *Oficina de Reparos* conserta
+  sozinha a construção mais avariada num raio de 6,5, gastando madeira do dono.
+* **Morte súbita (fase 4):** elfo sem Refúgio próprio concluído fica visível para os trolls.
+* **Versão:** `PROTOCOL` em `defs.js` vai no `welcome`, no `init` e em `/api/health`. Se cliente e servidor
+  divergem, o cliente não entra na partida (os dois geram o mapa localmente; versões diferentes = mapas diferentes).
+
 ## 5. Desempenho
 
 * Simulação: 0,03–0,15 ms por tick com 10 jogadores e ~150 construções (medido em `scripts/simulate.js`).

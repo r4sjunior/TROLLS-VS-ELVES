@@ -126,6 +126,60 @@ export function makeSpirit() {
   return g;
 }
 
+// Espírito Guardião (elfo que voltou para ajudar): translúcido, com asas de luz
+export function makeGuardian() {
+  const g = new THREE.Group();
+  const body = new THREE.Group(); g.add(body);
+  const aura = mat(0xbff8ff, { emissive: 0x6fe8ff, emissiveIntensity: 1.2, transparent: true, opacity: 0.6 });
+  part(geo.cone, aura, 0.55, 1.0, 0.55, 0, 0.75, 0, body);          // manto
+  part(geo.sph, aura, 0.36, 0.36, 0.36, 0, 1.4, 0, body);           // cabeça
+  const wing = mat(0xe8fdff, { emissive: 0x9ff7ff, emissiveIntensity: 1.4, transparent: true, opacity: 0.45, side: THREE.DoubleSide });
+  const wl = part(geo.cone4, wing, 0.12, 0.9, 0.5, 0.35, 1.05, -0.15, body); wl.rotation.z = -0.9;
+  const wr = part(geo.cone4, wing, 0.12, 0.9, 0.5, -0.35, 1.05, -0.15, body); wr.rotation.z = 0.9;
+  part(geo.oct, glow(0xfff6b0, 1.6), 0.14, 0.2, 0.14, 0, 1.75, 0, body).userData.spin = true; // estrela
+  g.scale.setScalar(1.25);
+  g.userData = { body, kind: 'guardian', height: 2.2, float: true };
+  return g;
+}
+
+// Lobo Sombrio (elfo que se rendeu aos trolls)
+export function makeWolf() {
+  const g = new THREE.Group();
+  const body = new THREE.Group(); g.add(body);
+  const fur = mat(0x3b3f4a), dark = mat(0x23262e), eye = glow(0xff4a2a, 1.4);
+  part(geo.sph, fur, 0.55, 0.5, 1.05, 0, 0.62, 0, body);            // tronco
+  part(geo.sph, fur, 0.48, 0.5, 0.5, 0, 0.72, 0.42, body);           // peito
+  const head = new THREE.Group(); head.position.set(0, 0.9, 0.62); body.add(head);
+  part(geo.sph, fur, 0.36, 0.34, 0.4, 0, 0, 0, head);
+  part(geo.box, dark, 0.2, 0.16, 0.34, 0, -0.06, 0.26, head);       // focinho
+  part(geo.cone4, fur, 0.1, 0.24, 0.08, 0.12, 0.2, -0.04, head);    // orelhas
+  part(geo.cone4, fur, 0.1, 0.24, 0.08, -0.12, 0.2, -0.04, head);
+  part(geo.sph, eye, 0.06, 0.05, 0.05, 0.09, 0.05, 0.17, head);
+  part(geo.sph, eye, 0.06, 0.05, 0.05, -0.09, 0.05, 0.17, head);
+  part(geo.cone, dark, 0.14, 0.6, 0.14, 0, 0.75, -0.55, body).rotation.x = -2.2; // cauda
+  const legL = part(geo.cyl, dark, 0.13, 0.42, 0.13, 0.18, 0.21, 0.3, g);
+  const legR = part(geo.cyl, dark, 0.13, 0.42, 0.13, -0.18, 0.21, 0.3, g);
+  part(geo.cyl, dark, 0.13, 0.42, 0.13, 0.18, 0.21, -0.32, g);
+  part(geo.cyl, dark, 0.13, 0.42, 0.13, -0.18, 0.21, -0.32, g);
+  g.scale.setScalar(1.25);
+  g.userData = { body, legL, legR, head, kind: 'wolf', height: 1.4 };
+  return g;
+}
+
+// Baú do covil: arca com ouro e brilho
+export function makeChest() {
+  const g = new THREE.Group();
+  const wood = mat(0x6b4426), band = mat(0xc9a13a, { emissive: 0x5a3c00, emissiveIntensity: 0.5 });
+  part(geo.box, wood, 1.2, 0.6, 0.8, 0, 0.3, 0, g);
+  part(geo.cyl, wood, 0.8, 1.2, 0.8, 0, 0.62, 0, g).rotation.z = Math.PI / 2;
+  part(geo.box, band, 1.24, 0.08, 0.84, 0, 0.45, 0, g);
+  part(geo.box, band, 0.12, 0.7, 0.84, 0.4, 0.4, 0, g);
+  part(geo.box, band, 0.12, 0.7, 0.84, -0.4, 0.4, 0, g);
+  part(geo.ico, glow(0xffd84a, 1.4), 0.3, 0.3, 0.3, 0, 1.25, 0, g).userData.spin = true;
+  g.userData = { height: 1.6 };
+  return g;
+}
+
 // ---------------------------------------------------------------- construções
 const TIER = {
   wood: { c: 0x7a5534, top: 0x5c3d22 },
@@ -224,6 +278,22 @@ export function makeBuilding(type, w, h) {
       part(geo.sph, glow(0x7fffd4, 0.6), 1.2, 0.9, 1.2, 0.2, 3.3, 0.1, inner);
       for (let i = 0; i < 5; i++) part(geo.oct, glow(0xb388ff, 1.3), 0.14, 0.2, 0.14, Math.cos(i * 1.3) * 0.9, 0.2, Math.sin(i * 1.3) * 0.9, inner);
       break;
+    case 'ninho': {
+      part(geo.cylT, mat(0x5b4636), 0.5, 1.4, 0.5, 0, 0.7, 0, inner);
+      part(geo.sph, mat(0x4f8a4a), 1.7, 0.8, 1.7, 0, 1.55, 0, inner);
+      part(geo.torus, mat(0x7a5534), 1.4, 1.4, 1.4, 0, 1.25, 0, inner).rotation.x = Math.PI / 2;
+      const orbit = new THREE.Group(); orbit.position.y = 1.2; orbit.userData.spin = true; inner.add(orbit);
+      for (let i = 0; i < 4; i++) part(geo.sph, glow([0xb6ff7a, 0xffe27a, 0x8af2ff, 0xff9ae0][i], 1.8), 0.16, 0.16, 0.16, Math.cos(i * 1.57) * 1.05, Math.sin(i * 2.1) * 0.25, Math.sin(i * 1.57) * 1.05, orbit);
+      break;
+    }
+    case 'oficina': {
+      part(geo.box, wood, 1.8, 0.9, 1.5, 0, 0.45, 0, inner);
+      part(geo.cone4, mat(0x6b707a), 1.9, 0.7, 1.9, 0, 1.25, 0, inner).rotation.y = Math.PI / 4;
+      part(geo.box, mat(0x3a3f47), 0.5, 0.35, 0.35, 0.65, 0.18, 0.85, inner); // bigorna
+      const gear = part(geo.torus, silver, 0.9, 0.9, 0.9, -0.55, 0.95, 0.8, inner); gear.userData.spin = true;
+      part(geo.cyl, mat(0x2b2b2b), 0.2, 0.7, 0.2, 0.6, 1.5, -0.4, inner);   // chaminé
+      break;
+    }
     case 'altar':
       part(geo.cylT, stone, 1.8, 0.4, 1.8, 0, 0.2, 0, inner);
       for (let i = 0; i < 4; i++) part(geo.box, stone, 0.25, 1.1, 0.25, Math.cos(i * Math.PI / 2 + 0.78) * 0.75, 0.75, Math.sin(i * Math.PI / 2 + 0.78) * 0.75, inner);

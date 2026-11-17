@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { Game } from '../src/shared/sim.js';
-import { DT, TROLL_CLASSES, MATCH_PRESETS } from '../src/shared/defs.js';
+import { DT, TROLL_CLASSES, MATCH_PRESETS, PROTOCOL } from '../src/shared/defs.js';
 import { MAP_PRESETS } from '../src/shared/mapgen.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -346,7 +346,7 @@ function handleMessage(ws, raw) {
     }
     ws.session = s;
     const resumed = !!(s.room && s.room.state === 'playing');
-    send(ws, { t: 'welcome', token: s.token, resumed });
+    send(ws, { t: 'welcome', token: s.token, resumed, proto: PROTOCOL });
     if (resumed) {
       s.room.game.setConnected(s.room.pids.get(s.token), true);
       s.room.sendInit(s);
@@ -418,7 +418,7 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === '/api/health') {
     res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
-    res.end(JSON.stringify({ ok: true, rooms: rooms.size, sessions: sessions.size }));
+    res.end(JSON.stringify({ ok: true, proto: PROTOCOL, commit: (process.env.RENDER_GIT_COMMIT || 'local').slice(0, 7), rooms: rooms.size, sessions: sessions.size }));
     return;
   }
   let file = path.normalize(path.join(DIST, decodeURIComponent(url.pathname)));

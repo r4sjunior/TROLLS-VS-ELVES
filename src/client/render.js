@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { TILE, BUILDINGS } from '../shared/defs.js';
-import { makeElf, makeTroll, makeSpirit, makeBuilding, treeGeometries, GEO, mat } from './models.js';
+import { makeElf, makeTroll, makeSpirit, makeGuardian, makeWolf, makeChest, makeBuilding, treeGeometries, GEO, mat } from './models.js';
 
 export const QUALITY = {
   baixa: { dpr: 0.75, shadows: false, aa: false, particles: 250, fog: 0.032, fireflies: 0, lod: 0 },
@@ -253,6 +253,10 @@ export class Renderer {
       mush.forEach((i, n) => { const r = hash(i + 11); mm.setMatrixAt(n, compose((i % W) + 0.2 + r * 0.6, 0.08, ((i / W) | 0) + 0.2 + hash(i + 5) * 0.6, 0, 0.18, 0.12, 0.18)); });
       this.static.add(mm);
     }
+    // Baú do covil (os elfos podem saquear)
+    const chest = makeChest(); chest.position.set(world.map.spawn.x, 0, world.map.spawn.y + 0.2); this.static.add(chest);
+    this.chest = chest;
+
     // Jaula do covil (só na preparação)
     this.cage = new THREE.Group();
     const sp = world.map.spawn; const cx = Math.floor(sp.x), cy = Math.floor(sp.y);
@@ -418,6 +422,12 @@ export class Renderer {
         case 'faro': this.ring(x, y, 0xff3b3b, 34, 1.4, 0.15); break;
         case 'roar': this.ring(x, y, 0xff8a1f, 7, 0.7); this.addShake(x, y, myPos, 0.6); break;
         case 'trap': this.burst(x, y, 0.3, 18, f.v === 'runa' ? 0xff6b3d : 0xbbbbbb, 3, 3); if (f.v === 'runa') this.ring(x, y, 0xff6b3d, 2.5, 0.5); break;
+        case 'heal': this.ring(x, y, 0x7dffb0, 2.4, 0.6); this.burst(x, y, 0.5, 18, 0x9dffc4, 1, 3, 0.5, 1.1); break;
+        case 'repair': this.burst(x, y, 0.8, 3, 0xffe08a, 1.2, 1.5, 3, 0.5); break;
+        case 'shield': this.ring(x, y, 0x9ff7ff, 3, 0.7); this.beam(x, y, 0x9ff7ff, 0.8, 0.5); break;
+        case 'block': this.burst(x, y, 1.0, 4, 0x9ff7ff, 1.5, 1.5, 2, 0.4); break;
+        case 'frost': this.ring(x, y, 0xa8e8ff, 4, 0.7); this.burst(x, y, 0.3, 30, 0xd8f6ff, 4, 1.5, 1, 1.0); break;
+        case 'loot': this.burst(x, y, 1.0, 34, 0xffd84a, 2.5, 4, 5, 1.2); this.ring(x, y, 0xffd84a, 2.5, 0.6); break;
         case 'dash': this.burst(x, y, 0.3, 12, 0xffffff, 2, 1, 3, 0.4); break;
         case 'revive': this.beam(x, y, 0xfff2a8, 1.2, 0.6); this.burst(x, y, 0.3, 30, 0xfff2a8, 1, 5, 0.5, 1.5); break;
         case 'evolve': this.beam(x, y, 0xff5a1f, 1.5, 0.9); this.ring(x, y, 0xff5a1f, 5, 1); this.addShake(x, y, myPos, 0.6); break;
@@ -454,6 +464,11 @@ export class Renderer {
       inner.scale.y = 0.15 + 0.85 * b.progress;
       const def = BUILDINGS[b.type];
       if (def.trap) inner.position.y = b.trapReady && b.progress >= 1 ? 0 : -0.06;
+      if (b.shielded && !o.bubble) {
+        o.bubble = new THREE.Mesh(GEO.sph, new THREE.MeshBasicMaterial({ color: 0x9ff7ff, transparent: true, opacity: 0.28, depthWrite: false, toneMapped: false }));
+        o.bubble.scale.set(b.w + 0.8, 2.6, b.h + 0.8); o.bubble.position.set(b.w / 2, 0.6, b.h / 2); o.g.add(o.bubble);
+      }
+      if (o.bubble) { o.bubble.visible = !!b.shielded; o.bubble.material.opacity = 0.22 + Math.sin(this.time * 6) * 0.08; }
       const show = b.hp < b.maxHp - 1 || b.progress < 1;
       const barColor = b.progress < 1 ? 0x7fd4ff : team === 'E' ? 0x5fd46a : 0xff5a4f;
       this.setBar(o.bar, b.progress < 1 ? b.progress : b.hp / b.maxHp, barColor, show);
@@ -491,7 +506,7 @@ export class Renderer {
       let o = this.units.get(u.id);
       if (!o || o.key !== key) {
         if (o) this.dyn.remove(o.g);
-        const g = dead ? makeSpirit() : u.team === 'E' ? makeElf(u.skin || 0) : makeTroll(u.cls, anc);
+        const g = dead ? makeSpirit() : u.cls === 'espirito' ? makeGuardian() : u.cls === 'lobo' ? makeWolf() : u.team === 'E' ? makeElf(u.skin || 0) : makeTroll(u.cls, anc);
         g.traverse((m) => { if (m.isMesh) { m.material = m.material.clone(); m.castShadow = this.q.shadows; } });
         const bar = this.makeBar(); bar.scale.set(1.1, 1.3, 1); g.add(bar);
         if (!dead) { // sombra suave no chão (barata, funciona em todas as qualidades)
@@ -521,8 +536,8 @@ export class Renderer {
         const walking = u.state === 'walk';
         o.walk += dt * (walking ? 11 : 0);
         const sw = walking ? Math.sin(o.walk) : 0;
-        ud.legL.rotation.x = sw * 0.7; ud.legR.rotation.x = -sw * 0.7;
-        ud.body.position.y = walking ? Math.abs(Math.sin(o.walk)) * 0.06 : Math.sin(this.time * 2 + u.id) * 0.015;
+        if (ud.legL) { ud.legL.rotation.x = sw * 0.7; ud.legR.rotation.x = -sw * 0.7; }
+        ud.body.position.y = ud.float ? 0.25 + Math.sin(this.time * 2.2 + u.id) * 0.12 : walking ? Math.abs(Math.sin(o.walk)) * 0.06 : Math.sin(this.time * 2 + u.id) * 0.015;
         const atk = u.state === 'attack', work = u.state === 'harvest' || u.state === 'build';
         ud.body.rotation.x = atk ? 0.25 + Math.sin(this.time * 18) * 0.15 : work ? 0.2 + Math.sin(this.time * 9) * 0.12 : 0;
         if (ud.armR) {

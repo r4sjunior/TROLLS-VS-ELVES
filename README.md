@@ -34,6 +34,14 @@ Ou `npx cap open android` e use *Build > Build APK(s)* no Android Studio. A orie
 landscape no `AndroidManifest.xml`. No APK, o multiplayer pede o endereço do servidor em *Configurações*
 (ex.: `192.168.0.10:3000`).
 
+## Novidades da versão 5
+
+* **Morreu? Escolha um lado:** Espírito Guardião (ajuda os elfos) ou Lobo Sombrio (caça com os trolls).
+* **Baú do covil:** cresce a cada 2 min; trolls levam o ouro de quem abatem e elfos podem saquear o baú.
+* **Loja do troll** com itens em níveis (cada nível custa o dobro).
+* **Ninho de Fadas** (coleta madeira sozinho) e **Oficina de Reparos** (conserta sozinha).
+* **Morte súbita** na fase final: quem não tem Refúgio fica visível para os trolls.
+
 ## Arena (multiplayer público)
 
 "Entrar na arena" coloca o jogador numa partida contínua:

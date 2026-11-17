@@ -2,10 +2,10 @@ import './style.css';
 import { Renderer } from './render.js';
 import { ClientWorld } from './world.js';
 import { LocalTransport, NetTransport } from './transport.js';
-import { Hud } from './hud.js';
+import { Hud, roleName } from './hud.js';
 import { initAudio, resumeAudio, setVolume, sfx } from './audio.js';
 import { loadProfile, saveProfile, recordMatch, claimDaily, dailyAvailable, ACHIEVEMENTS, SKIN_UNLOCK, accountXpFor } from './profile.js';
-import { TROLL_CLASSES, MATCH_PRESETS } from '../shared/defs.js';
+import { TROLL_CLASSES, MATCH_PRESETS, PROTOCOL } from '../shared/defs.js';
 import { MAP_PRESETS } from '../shared/mapgen.js';
 import { ELF_SKINS } from './models.js';
 
@@ -248,6 +248,14 @@ async function connectNet() {
   const tr = new NetTransport(serverUrl());
   beginGame(tr, false);
   tr.on('lobby', (m) => renderLobby(m.room));
+  tr.on('outdated', (m) => {
+    leaveGame();
+    screen(`<div class="card"><h2>Versão diferente</h2><p class="desc">${m.server > PROTOCOL
+      ? 'O servidor já foi atualizado. Recarregue a página para baixar a versão nova do jogo.'
+      : 'O servidor ainda está atualizando para a versão nova. Tente de novo em alguns minutos.'}</p>
+      <div class="row"><button class="btn ghost" data-go="menu">Menu</button><button class="btn hero" id="reload">Recarregar</button></div></div>`);
+    ui.querySelector('#reload').addEventListener('click', () => location.reload());
+  });
   tr.on('notice', (m) => { if (hud) hud.toast(m.msg); });
   tr.on('error', (m) => { if (hud) hud.toast(m.msg, 'warn'); else { const st = ui.querySelector('#st'); if (st) st.textContent = m.msg; } });
   tr.on('disconnect', () => setNet(true));
@@ -325,7 +333,13 @@ function beginGame(tr, local = true) {
   tr.on('snap', (s) => {
     if (!world) return;
     if (document.getElementById('net')?.className === 'on') setNet(false);
+    const before = world.me && world.me.team;
     world.apply(s);
+    if (hud && before && world.me && world.me.team !== before) {
+      hud.destroy();
+      hud = new Hud(hudRoot, { send: (c) => transport.send(c), renderer, onMenu: openPause, profile });
+      hud.setWorld(world);
+    }
     if (s.over && !endShown) { endShown = true; setTimeout(() => showEnd(s.over), 1200); }
   });
   tr.on('res', (m) => { if (hud && m.err) { hud.toast(m.err, 'warn'); sfx('error'); } });
@@ -366,7 +380,7 @@ function showEnd(over) {
   const rw = recordMatch(profile, over, pid);
   const won = me && me.team === over.winner;
   sfx(won ? 'level' : 'death');
-  const rows = over.players.slice().sort((a, b) => (a.team > b.team ? 1 : -1)).map((p) => `<tr class="${p.id === pid ? 'you' : ''}"><td>${esc(p.name)}${p.isBot ? ' <small>bot</small>' : ''}</td><td>${p.team === 'E' ? 'Elfo' : (p.ancestral ? 'Ancestral' : TROLL_CLASSES[p.cls].name)}</td><td>${p.level}</td><td>${p.team === 'E' ? (p.alive ? 'Vivo' : 'Caiu') : ''}</td><td>${p.stats.kills}</td><td>${p.stats.built}</td><td>${p.stats.destroyed}</td></tr>`).join('');
+  const rows = over.players.slice().sort((a, b) => (a.team > b.team ? 1 : -1)).map((p) => `<tr class="${p.id === pid ? 'you' : ''}"><td>${esc(p.name)}${p.isBot ? ' <small>bot</small>' : ''}</td><td>${roleName(p.team, p.cls, p.ancestral)}</td><td>${p.level}</td><td>${p.team === 'E' ? (p.cls === 'espirito' ? 'Espírito' : p.alive ? 'Vivo' : 'Caiu') : ''}</td><td>${p.stats.kills}</td><td>${p.stats.built}</td><td>${p.stats.destroyed}</td></tr>`).join('');
   screen(`<div class="card wide end ${won ? 'won' : 'lost'}"><h1>${over.winner === 'E' ? 'Os elfos viram o amanhecer' : 'Os trolls dominaram a floresta'}</h1>
     <h2>${won ? 'Vitória!' : 'Derrota'}</h2>
     <div class="rewards">+${rw.xp} XP de conta${rw.levelUp ? ` · Nível ${profile.level}!` : ''}${rw.unlocked.length ? `<br>Conquistas: ${rw.unlocked.map((id) => ACHIEVEMENTS.find((a) => a.id === id).name).join(', ')}` : ''}</div>

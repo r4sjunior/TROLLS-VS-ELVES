@@ -46,7 +46,7 @@ export class ClientWorld {
       if (b && b.type !== type) { this.clearGrid(b); }
       const def = BUILDINGS[type];
       const { w, h } = buildingDims(def, rot);
-      b = Object.assign(b || {}, { id, type, owner, x, y, rot, w, h, hp, maxHp, progress, trapReady: !!(flags & 1), revealed: !!(flags & 2) });
+      b = Object.assign(b || {}, { id, type, owner, x, y, rot, w, h, hp, maxHp, progress, trapReady: !!(flags & 1), revealed: !!(flags & 2), shielded: !!(flags & 4) });
       this.buildings.set(id, b);
       for (let ty = y; ty < y + h; ty++) for (let tx = x; tx < x + w; tx++) this.bgrid[ty * this.W + tx] = id;
     }
@@ -64,6 +64,8 @@ export class ClientWorld {
     this.players.clear();
     for (const [id, name, team, cls, alive, level, isBot, connected] of s.players) this.players.set(id, { id, name, team, cls, alive, level, isBot, connected });
     this.pings = s.pings;
+    this.bounty = s.bounty || 0;
+    if (s.chest) this.chest = s.chest;
     if (s.fx.length) for (const fn of this.listeners.fx) fn(s.fx);
   }
 
