@@ -20,13 +20,13 @@ export const WALKABLE = new Set([TILE.GRASS, TILE.RUIN, TILE.CAVE, TILE.SPAWN]);
 export const BUILDABLE = new Set([TILE.GRASS, TILE.RUIN, TILE.CAVE]);
 
 export const RESOURCE_AMOUNT = {
-  [TILE.FOREST]: 30,
+  [TILE.FOREST]: 45,
   [TILE.GOLD]: 260,
-  [TILE.CRYSTAL]: 24,
+  [TILE.CRYSTAL]: 36,
 };
 
 // Taxa base de coleta por segundo
-export const HARVEST_RATE = { wood: 3.0, gold: 1.6, crystal: 0.35 };
+export const HARVEST_RATE = { wood: 4.5, gold: 2.5, crystal: 0.55 };
 
 export const MATCH_PRESETS = {
   curta:  { duration: 8 * 60,  prep: 60 },
@@ -69,12 +69,12 @@ export const BUILDINGS = {
   raizes: { name: 'Raízes Prendedoras', cat: 'armadilhas', w: 1, h: 1, cost: { wood: 16, gold: 10 }, time: 2.5, hp: 140, armor: 0, trap: { dmg: 25, root: 2.5, rearm: 10 }, walkable: true, hidden: true },
   runa: { name: 'Runa Explosiva', cat: 'armadilhas', w: 1, h: 1, cost: { gold: 24, crystal: 3 }, time: 3, hp: 100, armor: 0, trap: { dmg: 200, root: 0, aoe: 2.5, once: true }, walkable: true, hidden: true, req: 'arvore' },
 
-  refugio: { name: 'Refúgio', cat: 'economia', w: 2, h: 2, cost: { wood: 30 }, time: 4, hp: 480, armor: 1, income: { gold: 0.5 }, heal: { radius: 3.2, rate: 5 } },
+  refugio: { name: 'Refúgio', cat: 'economia', w: 2, h: 2, cost: { wood: 30 }, time: 4, hp: 480, armor: 1, income: { gold: 0.8 }, heal: { radius: 3.2, rate: 5 } },
   deposito: { name: 'Depósito', cat: 'economia', w: 2, h: 2, cost: { wood: 40, gold: 10 }, time: 4, hp: 520, armor: 1, aura: { harvest: 0.6, radius: 9 } },
-  serraria: { name: 'Serraria', cat: 'economia', w: 2, h: 2, cost: { wood: 35, gold: 25 }, time: 5, hp: 500, armor: 1, income: { wood: 0.9 } },
-  extrator: { name: 'Extrator de Ouro', cat: 'economia', w: 2, h: 2, cost: { wood: 60, gold: 30 }, time: 6, hp: 560, armor: 2, income: { gold: 1.3 } },
+  serraria: { name: 'Serraria', cat: 'economia', w: 2, h: 2, cost: { wood: 35, gold: 25 }, time: 5, hp: 500, armor: 1, income: { wood: 1.5 } },
+  extrator: { name: 'Extrator de Ouro', cat: 'economia', w: 2, h: 2, cost: { wood: 60, gold: 30 }, time: 6, hp: 560, armor: 2, income: { gold: 2.0 } },
 
-  arvore: { name: 'Árvore Ancestral', cat: 'especiais', w: 2, h: 2, cost: { wood: 80, gold: 50, crystal: 3 }, time: 10, hp: 950, armor: 3, income: { crystal: 0.06 }, unlocks: true },
+  arvore: { name: 'Árvore Ancestral', cat: 'especiais', w: 2, h: 2, cost: { wood: 80, gold: 50, crystal: 3 }, time: 10, hp: 950, armor: 3, income: { crystal: 0.1 }, unlocks: true },
   altar: { name: 'Altar de Renascimento', cat: 'especiais', w: 2, h: 2, cost: { gold: 70, crystal: 8 }, time: 8, hp: 750, armor: 3, revive: { delay: 20, cooldown: 45 }, req: 'arvore' },
 };
 
@@ -85,9 +85,11 @@ export const DEMOLISH_REFUND = 0.5;
 
 // ---------------- Elfos ----------------
 export const ELF = {
-  hp: 110, speed: 4.4, radius: 0.32, vision: 9,
+  hp: 170, speed: 4.4, radius: 0.32, vision: 9,
   atk: { range: 6.5, dmg: 9, rate: 0.85 },
-  regen: 1.2,
+  regen: 2.5,
+  // Dano que elfos recebem de trolls (construções não são afetadas): dá tempo de fugir e reagir
+  dmgTaken: 0.8,
 };
 
 export const ELF_ABILITIES = [
@@ -98,7 +100,7 @@ export const ELF_ABILITIES = [
 export const ELF_UPGRADES = {
   coleta: { name: 'Mãos Ágeis', desc: '+30% coleta', max: 3, cost: (l) => ({ gold: 20 * (l + 1) }) },
   passos: { name: 'Passos Leves', desc: '+8% velocidade', max: 3, cost: (l) => ({ gold: 18 * (l + 1) }) },
-  vigor: { name: 'Vigor Silvestre', desc: '+40 vida máxima', max: 3, cost: (l) => ({ gold: 25 * (l + 1) }) },
+  vigor: { name: 'Vigor Silvestre', desc: '+50 vida máxima', max: 3, cost: (l) => ({ gold: 25 * (l + 1) }) },
   arco: { name: 'Arco Lunar', desc: '+5 dano de flecha', max: 3, cost: (l) => ({ gold: 20 * (l + 1), crystal: l }) },
 };
 
@@ -109,7 +111,7 @@ export const TROLL_CLASSES = {
     hp: 900, speed: 4.6, radius: 0.48, vision: 12, armor: 2,
     atk: { range: 1.0, dmg: 30, rate: 0.9 }, bldMul: 1.0,
     abilities: [
-      { id: 'faro', name: 'Faro', cd: 20, dur: 5, desc: 'Revela todos os elfos num raio de 34.' },
+      { id: 'faro', name: 'Faro', cd: 20, dur: 5, desc: 'Revela todos os elfos num raio de 50.' },
       { id: 'disparada', name: 'Disparada', cd: 12, dur: 3, desc: '+60% velocidade por 3s.' },
     ],
   },

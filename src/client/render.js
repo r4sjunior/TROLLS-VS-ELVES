@@ -9,8 +9,8 @@ export const QUALITY = {
 };
 
 const TILE_COLOR = {
-  [TILE.GRASS]: [0x52763f, 0x628a4a],
-  [TILE.FOREST]: [0x30482a, 0x3a5530],
+  [TILE.GRASS]: [0x67954a, 0x7aa956],
+  [TILE.FOREST]: [0x3f5f31, 0x4b6d3a],
   [TILE.ROCK]: [0x50525c, 0x5d5f6a],
   [TILE.WATER]: [0x173852, 0x1b4060],
   [TILE.GOLD]: [0x6a5e3c, 0x786a44],
@@ -19,6 +19,16 @@ const TILE_COLOR = {
   [TILE.CAVE]: [0x2e2238, 0x382a44],
   [TILE.SPAWN]: [0x6a352c, 0x7a4034],
 };
+
+// Sombra "blob": círculo escuro e translúcido, mais escuro no centro
+const BLOB_GEO = (() => {
+  const g = new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2);
+  const c = new Float32Array(g.attributes.position.count * 3);
+  for (let i = 0; i < g.attributes.position.count; i++) { const x = g.attributes.position.getX(i), z = g.attributes.position.getZ(i); const v = 0.5 + 0.5 * Math.min(1, Math.hypot(x, z)); c[i * 3] = c[i * 3 + 1] = c[i * 3 + 2] = v; }
+  g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+  return g;
+})();
+const BLOB_MAT = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true, transparent: true, opacity: 0.45, depthWrite: false, blending: THREE.MultiplyBlending, premultipliedAlpha: true });
 
 const hash = (i) => { let x = (i * 2654435761) >>> 0; x ^= x >>> 13; x = Math.imul(x, 1274126177) >>> 0; return (x >>> 0) / 4294967296; };
 
@@ -88,18 +98,20 @@ export class Renderer {
     this.gl.shadowMap.enabled = this.q.shadows;
     this.gl.shadowMap.type = THREE.PCFSoftShadowMap;
     this.gl.outputColorSpace = THREE.SRGBColorSpace;
+    this.gl.toneMapping = THREE.ACESFilmicToneMapping;
+    this.gl.toneMappingExposure = 1.4;
     this.scene = new THREE.Scene();
-    this.fogColor = new THREE.Color(0x15282c);
+    this.fogColor = new THREE.Color(0x24403e);
     this.scene.background = this.fogColor.clone();
     this.scene.fog = new THREE.FogExp2(this.fogColor.getHex(), this.q.fog);
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.5, 120);
     this.zoom = 0.85;
     this.focus = new THREE.Vector3(48, 0, 48);
     this.shake = 0;
-    this.hemi = new THREE.HemisphereLight(0x9db8e0, 0x2a3a1c, 2.1);
-    this.scene.add(new THREE.AmbientLight(0x404858, 0.9));
+    this.hemi = new THREE.HemisphereLight(0xa8c8ff, 0x3a4a22, 2.0);
+    this.scene.add(new THREE.AmbientLight(0x404858, 0.7));
     this.scene.add(this.hemi);
-    this.sun = new THREE.DirectionalLight(0xd6e2ff, 2.3);
+    this.sun = new THREE.DirectionalLight(0xffe6c4, 2.8);
     this.sun.position.set(-20, 40, 15);
     if (this.q.shadows) {
       this.sun.castShadow = true;
@@ -136,13 +148,20 @@ export class Renderer {
     for (const k of ['trees', 'gold', 'crystal']) if (this[k]) for (const c of this[k].chunks.values()) c.meshes.forEach((m) => { this.scene.remove(m); m.dispose(); });
     this.units.clear(); this.blds.clear(); this.projs.clear();
     const { W, H } = world;
-    // Terreno: textura de 1 texel por tile com filtro linear (transições suaves)
-    const data = new Uint8Array(W * H * 4);
+    // Terreno: TR texels por tile, cores interpoladas entre tiles vizinhos, granulado e
+    // sombreado (oclusão falsa) junto de matas e rochas → chão com profundidade, sem custo de luz extra
+    const TR = this.q.lod ? 4 : 2;
+    this.TR = TR;
+    this.tileCol = new Float32Array(W * H * 3);
+    this.tileAO = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) this.computeTile(i, world.tiles[i]);
+    for (let i = 0; i < W * H; i++) this.computeAO(i);
+    const data = new Uint8Array(W * TR * H * TR * 4);
     this.terrainData = data;
-    this.terrainTex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
+    this.terrainTex = new THREE.DataTexture(data, W * TR, H * TR, THREE.RGBAFormat);
     this.terrainTex.magFilter = THREE.LinearFilter; this.terrainTex.minFilter = THREE.LinearFilter;
     this.terrainTex.colorSpace = THREE.SRGBColorSpace;
-    for (let i = 0; i < W * H; i++) this.paintTile(i, world.tiles[i], false);
+    this.paintRegion(0, 0, W - 1, H - 1);
     this.terrainTex.needsUpdate = true;
     const gGeo = new THREE.PlaneGeometry(W, H, 1, 1);
     gGeo.rotateX(-Math.PI / 2); gGeo.translate(W / 2, 0, H / 2);
@@ -200,6 +219,25 @@ export class Renderer {
     for (const i of crys) this.addCrystal(i);
     this.trees.finalize(); this.gold.finalize(); this.crystal.finalize();
 
+    // Moitas de grama e flores (detalhe barato: uma única malha instanciada)
+    if (this.q.lod) {
+      const spots = [];
+      for (let i = 0; i < W * H; i++) if (world.tiles[i] === TILE.GRASS && hash(i + 19) < 0.42) spots.push(i);
+      const tuft = new THREE.ConeGeometry(0.07, 0.32, 3); tuft.translate(0, 0.16, 0);
+      const gm = new THREE.InstancedMesh(tuft, mat(0xffffff), spots.length * 3);
+      gm.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(spots.length * 9), 3);
+      let n = 0;
+      for (const i of spots) for (let k = 0; k < 3; k++) {
+        const r = hash(i * 3 + k), r2 = hash(i * 7 + k);
+        const flower = r2 > 0.93;
+        gm.setMatrixAt(n, compose((i % W) + 0.15 + r * 0.7, 0, ((i / W) | 0) + 0.15 + r2 * 0.7, r * 6, flower ? 0.9 : 1, flower ? 0.7 : 0.7 + r * 0.8, flower ? 0.9 : 1));
+        gm.setColorAt(n, flower ? new THREE.Color([0xf2d36b, 0xe88ad0, 0xa8d8ff][(r * 3) | 0]) : lerpColor(0x4f7f38, 0x86b04e, r2));
+        n++;
+      }
+      this.static.add(gm);
+      this.grass = gm;
+    }
+
     // Ruínas: colunas quebradas
     const pil = world.map.pillars;
     if (pil.length) {
@@ -236,17 +274,60 @@ export class Renderer {
     }
     this.scene.add(this.particles);
     world.on('tile', (i, t) => this.onTile(i, t));
+    // Anel que marca o personagem do jogador
+    this.meRing = new THREE.Mesh(new THREE.RingGeometry(0.62, 0.8, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x7dffd8, transparent: true, opacity: 0.8, depthWrite: false, toneMapped: false }));
+    this.meRing.position.y = 0.03; this.meRing.visible = false;
+    this.dyn.add(this.meRing);
     this.focus.set(world.W / 2, 0, world.H / 2);
   }
 
-  paintTile(i, t, update = true) {
+  computeTile(i, t) {
     const pal = TILE_COLOR[t] || TILE_COLOR[TILE.GRASS];
     const c = lerpColor(pal[0], pal[1], hash(i));
-    const W = this.world.W, H = this.world.H;
-    const x = i % W, y = (i / W) | 0;
-    const o = ((H - 1 - y) * W + x) * 4;
-    this.terrainData[o] = c.r * 255; this.terrainData[o + 1] = c.g * 255; this.terrainData[o + 2] = c.b * 255; this.terrainData[o + 3] = 255;
-    if (update) this.terrainTex.needsUpdate = true;
+    // manchas grandes de cor no gramado (campos mais claros e mais escuros)
+    if (t === TILE.GRASS) { const W = this.world.W; const m = Math.sin((i % W) * 0.21) * Math.cos(((i / W) | 0) * 0.17); c.offsetHSL(m * 0.02, 0, m * 0.035); }
+    this.tileCol[i * 3] = c.r; this.tileCol[i * 3 + 1] = c.g; this.tileCol[i * 3 + 2] = c.b;
+  }
+  computeAO(i) {
+    const W = this.world.W, H = this.world.H, x = i % W, y = (i / W) | 0, tl = this.world.tiles;
+    let n = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const xx = x + dx, yy = y + dy;
+      if (xx < 0 || yy < 0 || xx >= W || yy >= H) { n++; continue; }
+      const t = tl[yy * W + xx]; if (t === TILE.FOREST || t === TILE.ROCK) n++;
+    }
+    this.tileAO[i] = 1 - n * 0.028;
+  }
+  paintRegion(x0, y0, x1, y1) {
+    const W = this.world.W, H = this.world.H, TR = this.TR, TW = W * TR, TH = H * TR;
+    const col = this.tileCol, ao = this.tileAO, d = this.terrainData;
+    x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(W - 1, x1); y1 = Math.min(H - 1, y1);
+    for (let py = y0 * TR; py < (y1 + 1) * TR; py++) for (let px = x0 * TR; px < (x1 + 1) * TR; px++) {
+      // posição do texel em "espaço de tile", interpolando entre os centros dos 4 tiles vizinhos
+      const fx = (px + 0.5) / TR - 0.5, fy = (py + 0.5) / TR - 0.5;
+      const ix = Math.max(0, Math.min(W - 2, Math.floor(fx))), iy = Math.max(0, Math.min(H - 2, Math.floor(fy)));
+      let tx = Math.max(0, Math.min(1, fx - ix)), ty = Math.max(0, Math.min(1, fy - iy));
+      tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+      const a = iy * W + ix, b = a + 1, c = a + W, e = c + 1;
+      const w0 = (1 - tx) * (1 - ty), w1 = tx * (1 - ty), w2 = (1 - tx) * ty, w3 = tx * ty;
+      const shade = (ao[a] * w0 + ao[b] * w1 + ao[c] * w2 + ao[e] * w3) * (0.93 + hash(py * TW + px + 77) * 0.14);
+      const o = ((TH - 1 - py) * TW + px) * 4;
+      for (let k = 0; k < 3; k++) {
+        const v = col[a * 3 + k] * w0 + col[b * 3 + k] * w1 + col[c * 3 + k] * w2 + col[e * 3 + k] * w3;
+        d[o + k] = Math.min(255, v * shade * 255);
+      }
+      d[o + 3] = 255;
+    }
+  }
+  paintTile(i, t) {
+    const W = this.world.W, x = i % W, y = (i / W) | 0;
+    this.computeTile(i, t);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const xx = x + dx, yy = y + dy;
+      if (xx >= 0 && yy >= 0 && xx < W && yy < this.world.H) this.computeAO(yy * W + xx);
+    }
+    this.paintRegion(x - 2, y - 2, x + 2, y + 2);
+    this.terrainTex.needsUpdate = true;
   }
 
   addTree(i) {
@@ -403,6 +484,7 @@ export class Renderer {
     const team = world.team();
     const myId = world.me ? world.me.uid : -1;
     for (const [id, o] of this.units) if (!world.units.has(id)) { this.dyn.remove(o.g); this.units.delete(id); }
+    if (this.meRing) this.meRing.visible = false;
     for (const u of world.units.values()) {
       const dead = !!(u.flags & 16), anc = !!(u.flags & 8);
       const key = `${u.team}${u.cls}${anc}${dead}${u.skin}`;
@@ -412,6 +494,10 @@ export class Renderer {
         const g = dead ? makeSpirit() : u.team === 'E' ? makeElf(u.skin || 0) : makeTroll(u.cls, anc);
         g.traverse((m) => { if (m.isMesh) { m.material = m.material.clone(); m.castShadow = this.q.shadows; } });
         const bar = this.makeBar(); bar.scale.set(1.1, 1.3, 1); g.add(bar);
+        if (!dead) { // sombra suave no chão (barata, funciona em todas as qualidades)
+          const blob = new THREE.Mesh(BLOB_GEO, BLOB_MAT); const r = (u.team === 'T' ? 0.95 : 0.55) / (g.scale.x || 1);
+          blob.scale.set(r, 1, r); blob.position.y = 0.02 / (g.scale.y || 1); blob.renderOrder = -1; g.add(blob);
+        }
         bar.position.y = (g.userData.height || 1.5) / g.scale.y + 0.35;
         this.dyn.add(g);
         o = { g, key, bar, rx: u.x, ry: u.y, rf: u.face, walk: 0, opacity: 1 };
@@ -424,6 +510,11 @@ export class Renderer {
       o.rf += df * Math.min(1, dt * 12);
       const g = o.g; const ud = g.userData;
       g.position.set(o.rx, 0, o.ry);
+      if (u.id === myId && this.meRing && !dead) {
+        this.meRing.visible = true; this.meRing.position.x = o.rx; this.meRing.position.z = o.ry;
+        this.meRing.material.color.setHex(u.team === 'E' ? 0x7dffd8 : 0xff8a5c);
+        this.meRing.material.opacity = 0.55 + Math.sin(this.time * 4) * 0.25;
+      }
       g.rotation.y = Math.PI / 2 - o.rf;
       // Animação procedural
       if (ud.body) {
@@ -507,7 +598,7 @@ export class Renderer {
 
   setMood(world) {
     const ph = world.phase, ev = world.event && world.event.k;
-    let sky = 0x9db8e0, sun = 0xd6e2ff, fog = 0x15282c, dens = this.q.fog;
+    let sky = 0xa8c8ff, sun = 0xffe6c4, fog = 0x24403e, dens = this.q.fog;
     if (ph === 3) { sky = 0x9a96c8; fog = 0x1a1a34; }
     if (ph === 4) { sky = 0xb88090; sun = 0xffc0b0; fog = 0x2a141a; }
     if (ev === 'lua_sangue') { sky = 0xc05050; sun = 0xff7a6a; fog = 0x2a0c0c; }
@@ -535,7 +626,7 @@ export class Renderer {
     const z = this.zoom;
     const shx = (Math.random() - 0.5) * this.shake * 0.6, shz = (Math.random() - 0.5) * this.shake * 0.6;
     this.shake = Math.max(0, this.shake - dt * 2);
-    this.camera.position.set(this.focus.x + shx, 13 * z, this.focus.z + 9 * z + shz);
+    this.camera.position.set(this.focus.x + shx, 15 * z, this.focus.z + 7.2 * z + shz);
     this.camera.lookAt(this.focus.x, 0, this.focus.z - 0.5);
     this.sun.position.set(this.focus.x - 18, 40, this.focus.z + 14);
     this.sun.target.position.copy(this.focus);

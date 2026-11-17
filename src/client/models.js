@@ -238,10 +238,12 @@ export function makeBuilding(type, w, h) {
 
 // ---------------------------------------------------------------- recursos e cenário (geometrias para InstancedMesh)
 export function treeGeometries() {
-  const trunk = new THREE.CylinderGeometry(0.08, 0.13, 0.7, 5); trunk.translate(0, 0.35, 0);
-  const c1 = new THREE.ConeGeometry(0.55, 1.0, 6); c1.translate(0, 1.0, 0);
-  const c2 = new THREE.ConeGeometry(0.42, 0.85, 6); c2.translate(0, 1.5, 0);
-  const crown = mergeSimple([c1, c2]);
+  const trunk = new THREE.CylinderGeometry(0.07, 0.13, 0.8, 6); trunk.translate(0, 0.4, 0);
+  // Pinheiro em 3 camadas, cada uma girada para quebrar a simetria
+  const c1 = new THREE.ConeGeometry(0.6, 0.95, 7); c1.rotateY(0.3); c1.translate(0, 0.95, 0);
+  const c2 = new THREE.ConeGeometry(0.47, 0.85, 7); c2.rotateY(0.9); c2.translate(0.02, 1.42, -0.02);
+  const c3 = new THREE.ConeGeometry(0.31, 0.7, 7); c3.rotateY(1.7); c3.translate(-0.02, 1.85, 0.01);
+  const crown = mergeSimple([c1, c2, c3]);
   return { trunk, crown };
 }
 

@@ -78,7 +78,7 @@ export class Game {
     const p = {
       id, name: String(name || 'Jogador').slice(0, 16), team, cls: team === 'T' ? (own(TROLL_CLASSES, cls) ? cls : 'cacador') : 'elfo',
       isBot, difficulty, skin, connected: true, takeover: false,
-      res: team === 'E' ? { wood: 30, gold: 10, crystal: 0 } : { gold: 0 },
+      res: team === 'E' ? { wood: 60, gold: 25, crystal: 0 } : { gold: 0 },
       acc: { wood: 0, gold: 0, crystal: 0 },
       upgrades: {}, xp: 0, level: 1, ancestral: false,
       lastCmdAt: {},
@@ -141,7 +141,7 @@ export class Game {
     const up = p.upgrades, L = p.level;
     if (p.team === 'E') {
       u.r = ELF.radius;
-      u.maxHp = ELF.hp + (up.vigor || 0) * 40 + (L - 1) * 8;
+      u.maxHp = ELF.hp + (up.vigor || 0) * 50 + (L - 1) * 8;
       u.speed = ELF.speed * (1 + 0.08 * (up.passos || 0));
       u.dmg = ELF.atk.dmg + (up.arco || 0) * 5 + (L - 1);
       u.atkRange = ELF.atk.range; u.atkRate = ELF.atk.rate; u.ranged = true;
@@ -400,7 +400,7 @@ export class Game {
       case 'furia': u.buffs.atk = { mul: 1.6, until: t + ab.dur }; break;
       case 'ritual': u.buffs.heal = { rate: u.maxHp * 0.35 / ab.dur, until: t + ab.dur }; break;
       case 'faro':
-        for (const e of this.units.values()) if (e.team === 'E' && !e.dead && Math.hypot(e.x - u.x, e.y - u.y) < 34) e.revealedUntil = Math.max(e.revealedUntil, t + ab.dur);
+        for (const e of this.units.values()) if (e.team === 'E' && !e.dead && Math.hypot(e.x - u.x, e.y - u.y) < 50) e.revealedUntil = Math.max(e.revealedUntil, t + ab.dur);
         this.log({ k: 'faro', x: u.x, y: u.y, team: 'T' });
         break;
       case 'esmagar': {
@@ -445,6 +445,7 @@ export class Game {
   damageUnit(target, amount, src) {
     if (target.dead) return;
     let dmg = amount * (1 - Math.min(0.5, target.armor * 0.04));
+    if (target.team === 'E' && src && src.team === 'T') dmg *= ELF.dmgTaken;
     target.hp -= dmg;
     target.lastHitAt = this.time;
     if (target.team === 'E') target.stealthUntil = 0; // dano quebra camuflagem
@@ -795,7 +796,7 @@ export class Game {
       if (u.buffs.heal) u.hp = Math.min(u.maxHp, u.hp + u.buffs.heal.rate * dt);
       if (u.team === 'T' && t - u.lastHitAt > 4) u.hp = Math.min(u.maxHp, u.hp + u.maxHp * TROLL_REGEN * dt);
       if (u.team === 'E' && t - u.lastHitAt > 5) u.hp = Math.min(u.maxHp, u.hp + ELF.regen * dt);
-      if (u.team === 'T' && this.phase >= 2) { p.res.gold += 0.4 * dt; this.addXp(p, 0.9 * dt); }
+      if (u.team === 'T' && this.phase >= 2) { p.res.gold += 0.75 * dt; this.addXp(p, 1.5 * dt); }
       if (u.team === 'E') p.stats.survived = t;
     }
 

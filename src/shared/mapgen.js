@@ -3,9 +3,9 @@ import { makeRng } from './rng.js';
 import { TILE, RESOURCE_AMOUNT, WALKABLE } from './defs.js';
 
 export const MAP_PRESETS = {
-  floresta: { name: 'Floresta Sombria', size: 96, forest: 0.47, rock: 0.8, rivers: 1, caves: 3, ruins: 3, gold: 9, secrets: 2 },
-  vale: { name: 'Vale dos Rios', size: 96, forest: 0.55, rock: 0.72, rivers: 2, caves: 2, ruins: 4, gold: 8, secrets: 2 },
-  ruinas: { name: 'Ruínas Esquecidas', size: 88, forest: 0.52, rock: 0.76, rivers: 1, caves: 4, ruins: 6, gold: 8, secrets: 3 },
+  floresta: { name: 'Floresta Sombria', size: 144, forest: 0.47, rock: 0.8, rivers: 2, caves: 5, ruins: 5, gold: 15, secrets: 4 },
+  vale: { name: 'Vale dos Rios', size: 144, forest: 0.55, rock: 0.72, rivers: 3, caves: 4, ruins: 6, gold: 14, secrets: 4 },
+  ruinas: { name: 'Ruínas Esquecidas', size: 132, forest: 0.52, rock: 0.76, rivers: 2, caves: 6, ruins: 10, gold: 14, secrets: 5 },
 };
 
 function makeNoise(rng, cell) {

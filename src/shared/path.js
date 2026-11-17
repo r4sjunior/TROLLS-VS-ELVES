@@ -23,7 +23,7 @@ class Heap {
 
 const DIRS = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, 1.414], [1, -1, 1.414], [-1, 1, 1.414], [-1, -1, 1.414]];
 
-export function findPath(W, H, costFn, sx, sy, tx, ty, maxNodes = 6000) {
+export function findPath(W, H, costFn, sx, sy, tx, ty, maxNodes = 14000) {
   sx |= 0; sy |= 0; tx |= 0; ty |= 0;
   if (sx === tx && sy === ty) return [[tx, ty]];
   const N = W * H;
